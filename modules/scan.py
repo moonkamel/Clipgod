@@ -782,7 +782,9 @@ def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
 
         replayed = None
         source_url = job.get("source_url") or scfg.get("source_url")
-        if scfg.get("most_replayed", True) and is_youtube_url(source_url):
+        if scfg.get("most_replayed", True) and job.get("heatmap"):
+            replayed = heatmap_timeline(job["heatmap"], n_bins)      # récupéré par prepare sur le laptop
+        elif scfg.get("most_replayed", True) and is_youtube_url(source_url):
             heat = _optional("heatmap", lambda: _step_json(
                 ckpt, "heatmap", work / "heatmap.json", lambda: {"heatmap": fetch_heatmap(source_url)}))
             replayed = heatmap_timeline((heat or {}).get("heatmap"), n_bins)

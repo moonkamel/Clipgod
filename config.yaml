@@ -98,6 +98,26 @@ watch:
   cooldown_seconds: 120             # évite deux déclenchements sur le même moment
 
 # ---------------------------------------------------------------------
+# Lien laptop -> Drive : prepare / sync (laptop)
+# ---------------------------------------------------------------------
+prepare:
+  # auto  : YouTube -> téléchargé sur le laptop (YouTube bloque souvent les IP Colab),
+  #         Twitch/Kick -> téléchargé par le notebook (épargne la connexion du laptop)
+  # local : toujours télécharger sur le laptop puis uploader dans ClipGod/sources/
+  # cloud : le notebook télécharge toujours lui-même
+  download: auto
+  download_dir: cache/downloads
+  max_height: 1080
+  keep_local_download: false        # supprimer la VOD locale une fois uploadée
+  dedupe: true                      # refuse un 2e job pour la même vidéo (sauf --force)
+  colab_url: "https://colab.research.google.com/github/moonkamel/clipgod/blob/main/notebooks/clipgod_colab.ipynb"
+
+sync:
+  clips_dir: output/clips
+  moments_dir: output/moments
+  cleanup_sources: true             # retire la vidéo source de Drive après synchro (quota gratuit 15 Go)
+
+# ---------------------------------------------------------------------
 # Module 3 — scan (CLOUD GPU)
 # ---------------------------------------------------------------------
 scan:

@@ -102,7 +102,9 @@ def release_job(drive: DriveBackend, job_id: str, *, error: str | None = None) -
 # Préparation d'un job
 # ---------------------------------------------------------------------------
 def validate_job(job: Mapping[str, Any]) -> None:
-    missing = [k for k in ("job_id", "video_id", "source_drive_path") if not job.get(k)]
+    missing = [k for k in ("job_id", "video_id") if not job.get(k)]
+    if not job.get("source_drive_path") and not job.get("source_url"):
+        missing.append("source_drive_path|source_url")
     if missing:
         raise JobError(f"Job invalide, champs manquants : {', '.join(missing)}")
 
@@ -127,8 +129,28 @@ def fetch_model(drive: DriveBackend, local_dir: Path) -> Path | None:
     return drive.download_file(MODEL_REMOTE, local_dir / "model.pkl")
 
 
-def fetch_source(drive: DriveBackend, job: Mapping[str, Any], local_dir: Path) -> Path:
-    """Copie la vidéo source en local (réutilisée si déjà présente avec la même taille)."""
+def fetch_source(drive: DriveBackend, job: Mapping[str, Any], local_dir: Path, *, max_height: int = 1080) -> Path:
+    """Copie la vidéo source en local (réutilisée si déjà présente avec la même taille).
+
+    Job sans ``source_drive_path`` (``download: cloud``) : la VOD est téléchargée ici avec yt-dlp, ce qui
+    épargne la connexion du laptop.
+    """
+    if not job.get("source_drive_path"):
+        from modules.prepare import PrepareError, download_url
+
+        log.info("Téléchargement de la VOD dans le cloud : %s", job["source_url"])
+        last = [0.0]
+
+        def progress(done: int, total: int) -> None:
+            if total and time.perf_counter() - last[0] > 15:
+                last[0] = time.perf_counter()
+                log.info("téléchargement VOD %d%% (%.0f Mo)", 100 * done / total, done / 1e6)
+
+        try:
+            return download_url(str(job["source_url"]), local_dir, str(job["video_id"]), max_height=max_height,
+                                progress=progress)
+        except PrepareError as exc:
+            raise JobError(f"{exc} — si YouTube bloque Colab, relancez prepare avec --download local.") from exc
     remote = str(job["source_drive_path"])
     info = drive.stat(remote)
     if info is None or info.is_folder:
@@ -200,7 +222,8 @@ def process_job(
         scan_cfg["model_path"] = str(model)
 
     started = time.perf_counter()
-    source = fetch_source(drive, job, Path(workdir) / "sources")
+    source = fetch_source(drive, job, Path(workdir) / "sources",
+                          max_height=int((cfg.get("prepare") or {}).get("max_height", 1080)))
     result: dict[str, Any] = {"video_id": video_id, "worker": worker_id(), "stages": [], "clips": [],
                               "model": "model.pkl" if model else "default_weights"}
 

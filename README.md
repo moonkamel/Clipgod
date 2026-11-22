@@ -145,16 +145,30 @@ clipgod prepare --source "https://www.twitch.tv/videos/123456789" --streamer kai
 clipgod prepare --source ./inbox/raw_20261122_2130.mp4            # fichier local (ex. sortie de watch)
 ```
 
-`prepare` télécharge la VOD (yt-dlp), l'uploade dans `ClipGod/sources/` et crée `ClipGod/jobs/<job_id>.json` :
+`prepare` crée `ClipGod/jobs/<job_id>.json`. La façon dont la vidéo arrive sur le GPU dépend de
+`prepare.download`, ou de l'option `--download` :
+
+| Mode | Comportement |
+|---|---|
+| `auto` (défaut) | **YouTube** : téléchargé sur le laptop (yt-dlp), puis uploadé dans `ClipGod/sources/`, car YouTube bloque souvent les IP Colab. **Twitch / Kick** : téléchargé directement par le notebook, ce qui épargne la connexion du laptop. |
+| `local` | Toujours télécharger sur le laptop, puis uploader. ffmpeg est requis sur le laptop. |
+| `cloud` | Le notebook télécharge toujours lui-même. |
+
+Un fichier local, par exemple une sortie de `watch`, est toujours uploadé. Le graphe *most replayed* de YouTube
+est récupéré sur le laptop et embarqué dans le job. `data/model.pkl` est envoyé dans `ClipGod/model.pkl`
+s'il a changé. Un 2ᵉ `prepare` de la même vidéo est refusé, sauf avec `--force`.
 
 ```json
 {
   "job_id": "20261122-213045-a1b2c3",
-  "video_id": "twitch_123456789",
-  "source_drive_path": "ClipGod/sources/twitch_123456789.mp4",
-  "streamer": "kaicenat",
+  "video_id": "twitch_2345678",
   "platform": "twitch",
-  "created_at": "2026-11-22T21:30:45Z",
+  "source_url": "https://www.twitch.tv/videos/2345678",
+  "source_drive_path": null,
+  "download": "cloud",
+  "streamer": "kaicenat",
+  "heatmap": null,
+  "options": { "voiceover": false },
   "config": { "scan": { "...": "..." }, "render": { "...": "..." } }
 }
 ```
@@ -219,9 +233,13 @@ quota GPU variable ; Kaggle ~30 h GPU / semaine. Grâce aux checkpoints, un job 
 ### 4. Récupérer les clips — laptop
 
 ```bash
-clipgod sync --status        # état des jobs (en attente / terminés)
-clipgod sync                 # télécharge ClipGod/clips/ et moments/ → output/
+clipgod sync --status        # état de la file : queued / running / retry / done / failed / synced
+clipgod sync                 # télécharge clips (.mp4 + .json) et moments → output/, met à jour data/state.json
+clipgod sync --job-id <id>   # un seul job
 ```
+
+Après synchronisation, la vidéo source est retirée de Drive (`sync.cleanup_sources`, quota gratuit de 15 Go).
+Un job en échec est affiché avec son erreur. La commande est idempotente : relancer `sync` ne retélécharge rien.
 
 ### 5. Valider et publier — laptop
 
@@ -340,7 +358,7 @@ pytest
 3. ✅ `modules/scan.py` + `core/scoring.py`
 4. ✅ `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh` + `core/worker.py`
 5. ✅ `modules/render.py` + mise à jour du notebook
-6. `prepare` / `sync`
+6. ✅ `prepare` / `sync`
 7. Notebook Kaggle
 8. `discover` · 9. `publish` · 10. `monetize` · 11. `learn`
 12. `watch`

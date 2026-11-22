@@ -86,9 +86,57 @@ def prepare(
     streamer: Optional[str] = typer.Option(None, "--streamer", help="Pseudo pour l'overlay @streamer."),
     campaign: Optional[str] = typer.Option(None, "--campaign", help="Campagne cible (monetize)."),
     voiceover: bool = typer.Option(False, "--voiceover", help="Active la voix off Piper au rendu."),
+    download: Optional[str] = typer.Option(
+        None, "--download", help="auto | local (laptop) | cloud (notebook). Défaut : config prepare.download."
+    ),
+    force: bool = typer.Option(False, "--force", help="Crée un job même si la vidéo a déjà été envoyée."),
 ) -> None:
-    """Télécharge la source, l'uploade dans ClipGod/sources/ et crée ClipGod/jobs/<job_id>.json."""
-    raise NotImplementedError("prepare : à implémenter (étape 6).")
+    """Dépose la source dans ClipGod/sources/ (ou la confie au notebook) et crée ClipGod/jobs/<job_id>.json."""
+    job = _prepare_job(ctx, source, job_id=job_id, streamer=streamer, campaign=campaign, voiceover=voiceover,
+                       download=download, force=force)
+    _print_next_steps(ctx.obj["config"], job)
+
+
+def _prepare_job(ctx: typer.Context, source: str, **kwargs) -> dict:
+    from rich.progress import BarColumn, DownloadColumn, Progress, TransferSpeedColumn
+
+    from core.drive import get_drive
+    from modules.prepare import PrepareError
+    from modules.prepare import prepare as run_prepare
+
+    cfg = ctx.obj["config"]
+    if kwargs.get("download") not in (None, "auto", "local", "cloud"):
+        console.print("[red]--download doit valoir auto, local ou cloud.[/]")
+        raise typer.Exit(1)
+    if ctx.obj.get("dry_run"):
+        console.print(f"[yellow]--dry-run :[/] aucun job créé pour {source}")
+        raise typer.Exit(0)
+    drive = get_drive(cfg)
+    with Progress("[progress.description]{task.description}", BarColumn(), DownloadColumn(), TransferSpeedColumn(),
+                  console=console, transient=True) as bar:
+        task = bar.add_task("transfert", total=None)
+
+        def progress(done: int, total: int) -> None:
+            bar.update(task, completed=done, total=total or None)
+
+        try:
+            return run_prepare(source, cfg, drive, progress=progress, **kwargs)
+        except PrepareError as exc:
+            console.print(f"[red]prepare :[/] {exc}")
+            raise typer.Exit(1) from None
+
+
+def _print_next_steps(cfg: dict, job: dict) -> None:
+    from modules.prepare import colab_url
+
+    if job.get("_existing"):
+        console.print(f"[yellow]Déjà envoyé :[/] job {job['job_id']} ({job['_existing']}) pour {job['video_id']}. "
+                      "Ajoutez --force pour recommencer.")
+        return
+    where = "uploadée dans ClipGod/sources/" if job.get("source_drive_path") else "téléchargée par le notebook"
+    console.print(f"[green]✔ Job {job['job_id']}[/] déposé dans ClipGod/jobs/ — vidéo {job['video_id']} ({where})")
+    console.print(f"→ Ouvrez le notebook Colab (GPU T4, Tout exécuter) : {colab_url(cfg)}")
+    console.print("→ Une fois terminé, lancez : [bold]clipgod sync[/]")
 
 
 # ---------------------------------------------------------------------------
@@ -198,9 +246,49 @@ def sync(
     ctx: typer.Context,
     job_id: Optional[str] = typer.Option(None, "--job-id", help="Ne synchroniser qu'un job."),
     status: bool = typer.Option(False, "--status", help="Affiche l'état des jobs sans télécharger."),
+    redownload: bool = typer.Option(False, "--redownload", help="Re-vérifie aussi les jobs déjà synchronisés."),
 ) -> None:
     """Télécharge ClipGod/clips/ + moments/ vers output/ et met à jour l'état local."""
-    raise NotImplementedError("sync : à implémenter (étape 6).")
+    from rich.table import Table
+
+    from core.config import path
+    from core.drive import get_drive
+    from core.storage import StateStore
+    from modules.sync import queue_overview
+    from modules.sync import sync as run_sync
+
+    cfg = ctx.obj["config"]
+    drive = get_drive(cfg)
+    state = StateStore(path(cfg, "state"))
+    rows = queue_overview(drive, state)
+    colors = {"queued": "yellow", "running": "cyan", "retry": "magenta", "done": "green", "synced": "dim",
+              "failed": "red"}
+    table = Table(title="File ClipGod (Drive)")
+    for col in ("job", "vidéo", "streamer", "statut", "détail"):
+        table.add_column(col)
+    for r in rows:
+        if job_id and r.job_id != job_id:
+            continue
+        table.add_row(r.job_id, r.video_id or "", r.streamer or "", f"[{colors.get(r.status, 'white')}]{r.status}[/]",
+                      r.detail)
+    console.print(table if rows else "[dim]Aucun job sur Drive. Lancez clipgod prepare --source <url>.[/]")
+    if status or ctx.obj.get("dry_run"):
+        return
+
+    report = run_sync(cfg, drive, job_id=job_id, redownload=redownload)
+    n_clips = sum(1 for p in report.downloaded if p.endswith(".mp4"))
+    console.print(f"[green]✔ {len(report.synced_jobs)} job(s) synchronisé(s)[/], {n_clips} clip(s) téléchargé(s), "
+                  f"{report.skipped} fichier(s) déjà à jour.")
+    for src in report.cleaned_sources:
+        console.print(f"[dim]  source retirée de Drive : {src}[/]")
+    for jid, err in report.failed_jobs:
+        console.print(f"[red]✖ job {jid} en échec :[/] {err}")
+    for err in report.errors:
+        console.print(f"[red]✖[/] {err}")
+    if report.errors:
+        raise typer.Exit(1)
+    if report.synced_jobs:
+        console.print("→ Étape suivante : [bold]clipgod publish[/] (validation monetize incluse)")
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +357,20 @@ def run(
     source: Optional[str] = typer.Option(
         None, "--source", "-s", help="URL/fichier. Absent : prend la meilleure source de discover."
     ),
-    resume: bool = typer.Option(True, "--resume/--fresh", help="Reprend depuis le dernier checkpoint."),
+    streamer: Optional[str] = typer.Option(None, "--streamer", help="Pseudo pour l'overlay @streamer."),
+    campaign: Optional[str] = typer.Option(None, "--campaign", help="Campagne cible."),
+    download: Optional[str] = typer.Option(None, "--download", help="auto | local | cloud."),
+    resume: bool = typer.Option(True, "--resume/--fresh", help="--fresh : recrée un job même si la vidéo existe."),
 ) -> None:
     """Enchaîne discover -> prepare puis indique d'ouvrir le notebook Colab et de lancer `clipgod sync`."""
-    raise NotImplementedError("run : à implémenter (après prepare/sync).")
+    if source is None:
+        from modules.discover import best_source  # étape 8
+
+        source = best_source(ctx.obj["config"])
+        console.print(f"Meilleure source trouvée par discover : {source}")
+    job = _prepare_job(ctx, source, job_id=None, streamer=streamer, campaign=campaign, voiceover=False,
+                       download=download, force=not resume)
+    _print_next_steps(ctx.obj["config"], job)
 
 
 def main() -> None:
