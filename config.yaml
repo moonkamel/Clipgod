@@ -21,6 +21,7 @@ paths:
   historical_scores: data/historical_scores.csv
   model: data/model.pkl
   rejected: data/rejected.json
+  campaigns_json: data/campaigns.json
   state: data/state.json          # état local (jobs envoyés, clips synchronisés, checkpoints)
   report: report.html
 
@@ -28,6 +29,13 @@ paths:
 # Lien laptop <-> cloud : Google Drive (seul canal de communication)
 # ---------------------------------------------------------------------
 drive:
+  # auto  : Colab -> montage ; laptop avec local_root -> dossier synchronisé ; sinon -> API Drive
+  # local : dossier local (montage Colab ou « Google Drive pour ordinateur » sur le laptop)
+  # api   : API Drive v3 (OAuth)
+  backend: auto
+  # Laptop avec Google Drive pour ordinateur (optionnel, évite l'OAuth) :
+  #   Windows : "G:/Mon Drive/ClipGod"   macOS : "~/Library/CloudStorage/GoogleDrive-<compte>/My Drive/ClipGod"
+  local_root: null
   root_folder: ClipGod
   folders:
     jobs: jobs
@@ -35,9 +43,10 @@ drive:
     moments: moments
     clips: clips
     jobs_done: jobs_done
-  # Côté laptop : OAuth "installed app". Fichiers référencés via env :
+  # Backend API : OAuth "application de bureau". Chemins référencés via env :
   #   CLIPGOD_GDRIVE_CLIENT_SECRETS  (chemin vers client_secrets.json)
-  #   CLIPGOD_GDRIVE_TOKEN           (chemin du token OAuth mis en cache)
+  #   CLIPGOD_GDRIVE_TOKEN           (chemin du token OAuth mis en cache, défaut secrets/drive_token.json)
+  #   CLIPGOD_GDRIVE_TOKEN_JSON      (CONTENU du token — Kaggle/headless, via secret Kaggle)
   credentials_env: CLIPGOD_GDRIVE_CLIENT_SECRETS
   token_env: CLIPGOD_GDRIVE_TOKEN
   # Côté Colab : Drive monté sur /content/drive/MyDrive
@@ -53,14 +62,23 @@ drive:
 # ---------------------------------------------------------------------
 discover:
   platforms: [youtube, twitch, kick]
-  cache_ttl_seconds: 300            # cache local 5 min
+  cache_ttl_seconds: 300            # cache local 5 min par plateforme
   max_vod_age_hours: 24
-  min_duration_minutes: 45
+  min_duration_minutes: 45          # VOD > 45 min ; live en cours depuis > 45 min
   max_results_per_platform: 25
-  min_viewers: 500
-  keywords: ["GTA 6", "GTA VI", "Grand Theft Auto VI", "GTA6"]
+  min_viewers: 500                  # ignoré pour les chaînes de campaigns.txt
+  keywords: ["GTA 6", "GTA VI", "GTA6", "Grand Theft Auto VI", "Grand Theft Auto 6"]
   twitch_game_name: "Grand Theft Auto VI"
-  rank_by: viewers_per_hour          # ratio viewers / heure de stream
+  rank_by: views_per_hour           # campagnes d'abord, puis vues/heure
+  youtube:
+    search_live: true               # 1 search.list = 100 unités
+    search_vods: true               # 1 search.list = 100 unités
+    max_units_per_run: 300
+    daily_budget: 1500              # part du quota (10 000/j) réservée à discover ; le reste va aux uploads
+  kick:
+    channels: []                    # slugs suivis en plus de campaigns.txt (kick:<slug>)
+    videos_per_channel: 5
+    delay_seconds: 0.5              # lecture légère : pause entre deux chaînes
   env:
     youtube_api_key: YOUTUBE_API_KEY
     twitch_client_id: TWITCH_CLIENT_ID
@@ -70,24 +88,32 @@ discover:
 # Module 2 — watch (laptop ou petit VPS) — gourmand en bande passante
 # ---------------------------------------------------------------------
 watch:
-  disable-watch: true               # true = module désactivé
+  disable-watch: true               # true = module désactivé (clipgod watch --force pour l'utiliser quand même)
   buffer_minutes: 8
   segment_seconds: 60
   post_trigger_minutes: 2
   chat_poll_seconds: 2
-  quality: "720p,best"
+  quality: "720p,best"              # qualité streamlink (720p60, 480p, best…)
+  cooldown_seconds: 120             # évite deux déclenchements sur le même moment
+  auto_prepare: false               # true = chaque capture est envoyée au notebook automatiquement
+  keep_buffer_on_exit: false
+  youtube_chat_min_poll_seconds: 10 # API Live Chat : 5 unités de quota par lecture
   hype:
-    sigma_threshold: 2.0            # seuil = moyenne + 2 écarts-types
-    baseline_window_seconds: 300
+    sigma_threshold: 2.0            # seuil = moyenne + 2 écarts-types du score
+    baseline_window_seconds: 300    # « normale » calculée sur les 5 dernières minutes
+    min_warmup_seconds: 60          # pas de déclenchement pendant la 1re minute (calibrage)
     weights:
       chat_velocity: 0.5
       new_chatters: 0.2
       reaction_ratio: 0.3
-    reaction_patterns: ["WTF", "NO WAY", "CLIP THAT", "CLIP IT", "OMG", "LMAO", "KEKW", "POG", "😂", "💀", "🔥", "😱"]
+    reaction_patterns: ["WTF", "NO WAY", "CLIP THAT", "CLIP IT", "OMG", "LMAO", "LMFAO", "KEKW", "LUL", "OMEGALUL",
+                        "POG", "POGGERS", "HOLY", "INSANE", "😂", "💀", "🔥", "😱"]   # pas « bro » : trop courant
   reconnect:
     max_attempts: 3
-    backoff_base_seconds: 5         # 5s, 10s, 20s
-  cooldown_seconds: 120             # évite deux déclenchements sur le même moment
+    backoff_base_seconds: 5         # 5 s, 10 s, 20 s
+  kick:
+    pusher_key: "32cbd69e4b950bf97679"   # clé publique du WebSocket de chat de Kick (peut changer)
+    pusher_cluster: us2
 
 # ---------------------------------------------------------------------
 # Module 3 — scan (CLOUD GPU)
@@ -95,24 +121,41 @@ watch:
 scan:
   whisper:
     model: auto                     # auto | large-v3 | medium | small
-    auto_vram_threshold_gb: 10      # >= seuil -> large-v3, sinon medium
-    device: cuda
+    auto_vram_threshold_gb: 10      # >= seuil -> large-v3 (T4 = 15 Go), sinon medium
+    fallback_models: [medium, small]  # essayés si mémoire GPU insuffisante
+    device: cuda                    # bascule auto sur cpu/int8 si aucun GPU
     compute_type: float16
+    batch_size: 16                  # BatchedInferencePipeline (x3-4 plus rapide sur T4) ; 0 = désactivé
     language: null                  # null = auto-détection
     beam_size: 5
     vad_filter: true
-    word_timestamps: true
+    word_timestamps: true           # toujours activé (requis pour les sous-titres mot à mot)
+  require_transcript: true          # false = continuer sans texte si whisper échoue
+  transcript_path: null             # réutiliser une transcription existante (re-scan sans GPU)
+  work_dir: null                    # checkpoints ; défaut <output_dir>/.work (notebook : sur Drive)
+  tmp_dir: null                     # WAV temporaire ; défaut /tmp/clipgod
   windows:
     min_seconds: 15
     max_seconds: 45
-    step_seconds: 5
+    length_step_seconds: 5          # longueurs testées : 15, 20, ..., 45
+    step_seconds: 5                 # pas de glissement
+  clip_min_seconds: null            # défaut : max(monetize min, 8)
+  clip_max_seconds: null            # défaut : monetize max - 0,5 (strictement < 30 s)
   top_k_moments: 3
+  min_score: 40                     # sous ce score, un moment n'est pas rendu (reste candidat)
+  max_candidates: 5                 # moments supplémentaires (sans hooks) gardés pour revue manuelle
   hooks_per_moment: 3
   hook_max_chars: 60
+  hook_language: en                 # en | fr (audience cible des campagnes)
   min_gap_between_moments_seconds: 30
+  most_replayed: true               # yt-dlp, VODs YouTube uniquement
   visual:
+    enabled: true
     sample_fps: 2
-    scene_threshold: 0.45
+    frame_width: 160
+    frame_height: 90
+    scene_threshold: 0.4            # distance de Bhattacharyya entre histogrammes
+    hwaccel: auto                   # auto (NVDEC si nvidia-smi) | cuda | none
   # Pondérations par défaut (utilisées si data/model.pkl absent)
   default_weights:
     audio_loudness_peak: 0.20
@@ -120,11 +163,16 @@ scan:
     text_hype_keywords: 0.20
     text_unfinished_then_burst: 0.10
     text_repetition: 0.05
+    text_speech_rate: 0.05
     visual_motion: 0.10
     visual_scene_changes: 0.05
     most_replayed: 0.20
-  hype_keywords: ["no way", "wtf", "oh my god", "omg", "let's go", "what", "bro", "insane",
-                  "putain", "c'est pas possible", "nooo", "clip", "run", "cops", "wanted"]
+  model_path: null                  # défaut : paths.model (data/model.pkl)
+  model_blend: 0.5                  # part max du modèle appris dans le score final
+  model_full_trust_samples: 50      # nb de clips à partir duquel le modèle a son poids max
+  hype_keywords: ["no way", "wtf", "oh my god", "omg", "let's go", "lets go", "what", "bro", "insane",
+                  "oh no", "nooo", "clip that", "clip it", "run", "cops", "wanted", "holy", "bruh",
+                  "putain", "c'est pas possible", "non non", "oh la la", "quoi"]
 
 # ---------------------------------------------------------------------
 # Module 4 — render (CLOUD GPU)
@@ -133,59 +181,91 @@ render:
   width: 1080
   height: 1920
   fps: 30
-  codec: libx264
-  crf: 20
-  preset: medium
+  encoder: auto                     # auto (h264_nvenc si GPU, sinon libx264) | h264_nvenc | libx264
+  nvenc_preset: p5
+  nvenc_cq: 21
+  crf: 20                           # libx264
+  preset: medium                    # libx264
   audio_bitrate: 192k
   loudness_lufs: -14
+  ab_variants: true                 # un clip par hook (A/B test) ; false = seulement le 1er hook
+  cache_dir: null                   # modèles/polices téléchargés ; défaut ~/.cache/clipgod
   layout:
+    mode: auto                      # auto (facecam détectée ?) | facecam | center
     facecam_detector: yunet
     yunet_model_url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    face_score_threshold: 0.7
+    analysis_fps: 2
+    facecam_min_ratio: 0.5          # visage présent et immobile dans >= 50 % des frames
+    facecam_max_face_width: 0.25    # au-delà : plein écran (IRL/cinématique), pas une incrustation
+    facecam_position_tolerance: 0.05
+    facecam_zoom: 2.6               # cadre facecam = 2,6 x la hauteur du visage
+    facecam_regions: {}             # forçage par streamer : {kaicenat: [x, y, w, h]} normalisés 0..1
     gameplay_ratio: 0.70            # gameplay en haut 70%
     facecam_ratio: 0.30             # facecam en bas 30%
     separator_blur: 25
-    smoothing_alpha: 0.15           # lissage du recadrage
+    separator_height: 48
+    smoothing_alpha: 0.15           # lissage EMA du recadrage centré
+    track_min_face_width: 0.08
   subtitles:
-    font: "Montserrat-ExtraBold"
+    font_name: "Montserrat ExtraBold"
+    font_url: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-ExtraBold.ttf"
     font_size: 86
     outline: 6
     y_position_ratio: 0.64
     uppercase: true
-    highlight_color: "&H0000FFFF"   # ASS BGR (jaune)
+    max_words: 3
+    max_chars: 18
+    color: white
+    highlight_color: "&H0000E6FF"   # ASS &H00BBGGRR (jaune) ou #RRGGBB
   hook:
     duration_seconds: 2.0
     font_size: 72
-    box_color: "white"
-    text_color: "black"
-    animation: pop
+    box_color: white
+    text_color: black
+    box_padding: 18
+    y_position_ratio: 0.20
+    animation: pop                  # pop | slide | none
+    strip_emoji: true               # libass n'affiche pas les emojis couleur
   streamer_overlay:
     enabled: true
     template: "@{streamer}"
     font_size: 44
     y_position_ratio: 0.94
   voiceover:
-    enabled: false                  # flag --voiceover
+    enabled: false                  # flag --voiceover (prepare) / options.voiceover du job
     engine: piper
     voice: "en_US-ryan-high"
+    voices_base_url: "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+    duck_volume: 0.3                # volume du son d'origine pendant la voix off
 
 # ---------------------------------------------------------------------
 # Module 5 — publish (laptop)
 # ---------------------------------------------------------------------
 publish:
   platforms: [youtube_shorts, tiktok, instagram_reels]
-  backend: upload_post              # upload_post | youtube_api | dry_run
-  test_mode: true                   # true = privé / non listé, aucune diffusion publique
+  routes:                           # plateforme -> backend : youtube_api | upload_post | dry_run
+    youtube_shorts: youtube_api     # API officielle (gratuite)
+    tiktok: upload_post             # optionnel : nécessite UPLOAD_POST_API_KEY + UPLOAD_POST_USER
+    instagram_reels: upload_post
+  test_mode: true                   # true = YouTube en privé, rien de public (CLI : --test / --live)
+  youtube_privacy: public           # en --live --now (sans programmation)
   max_posts_per_day: 6
-  slots:                            # heures locales de forte audience
+  slots:                            # heures locales (project.timezone) de forte audience
     eu_morning: ["08:30", "11:00"]
     us_evening: ["00:30", "01:30", "02:30", "03:30"]   # 18h30-21h30 EST, exprimé en heure de Paris
   ab_testing:
-    enabled: true
-    hooks_per_clip: 3
+    enabled: true                   # variantes de hook d'un même moment sur des créneaux/plateformes différents
+  hashtags: ["#gta6", "#gtavi", "#shorts", "#gaming", "#gta"]
+  credit_template: "🎮 Credit: @{streamer}"
   youtube_quota:
     daily_units: 10000
     upload_cost: 1600
     safety_margin: 200
+  upload_post:
+    endpoint: "https://api.upload-post.com/api/upload"   # à vérifier dans la doc Upload-Post
+    user_env: UPLOAD_POST_USER      # nom du profil Upload-Post (variable d'environnement)
+    analytics_endpoint: null        # ex. "https://api.upload-post.com/api/analytics/{request_id}" (à vérifier)
   env:
     upload_post_api_key: UPLOAD_POST_API_KEY
     youtube_client_secrets: YOUTUBE_CLIENT_SECRETS
@@ -195,15 +275,23 @@ publish:
 # ---------------------------------------------------------------------
 monetize:
   whop_rewards_url: "https://whop.com/discover/content-rewards/"
+  campaign_url_template: "https://whop.com/{slug}/"   # pour les lignes whop:<slug> de campaigns.txt
+  manual_file: data/whop_campaigns.yaml   # saisie manuelle : prime toujours sur le scraping
+  cache_file: data/campaigns.json
   scrape_cache_seconds: 1800
+  delay_seconds: 1.0                # scraping léger : 1 page/seconde maximum
   user_agent: "Mozilla/5.0 (compatible; ClipGod/0.1)"
-  min_cpm_usd: 0.5
+  min_cpm: 0.5
   min_budget_remaining_usd: 100
+  prior_views_per_clip: 2000        # vues attendues par clip tant qu'il n'y a pas d'historique
+  clips_per_vod_hour: 3             # clips validés par heure de VOD tant qu'il n'y a pas d'historique
   rules_default:
     min_duration_seconds: 7
     max_duration_seconds: 30
     hook_within_seconds: 1.0
     require_transformation: true    # pas de simple re-upload
+    min_editorial_transformations: 2
+    vertical_only: true
 
 # ---------------------------------------------------------------------
 # Module 7 — learn (laptop, CPU)
@@ -212,14 +300,16 @@ learn:
   checkpoints_hours: [1, 6, 24, 72]
   retrain_every_n_clips: 20
   retrain_every_days: 7
-  target: views_24h
+  target: views_24h                 # vues à 24 h : bon compromis vitesse de retour / fiabilité
+  min_samples_to_train: 10
+  manual_views_file: data/manual_views.csv   # TikTok/Instagram sans API : post_id (ou url), views, measured_at
   model:
     type: GradientBoostingRegressor
     n_estimators: 300
     learning_rate: 0.05
     max_depth: 3
+    subsample: 0.9
     random_state: 42
-  min_samples_to_train: 10
 
 # ---------------------------------------------------------------------
 # Logs / robustesse

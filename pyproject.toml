@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Transforme streams et VODs GTA 6 en clips verticaux monétisables. Orchestration locale + calcul lourd sur GPU cloud gratuit (Colab/Kaggle) via Google Drive."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "ClipGod contributors" }]
 keywords = ["clipping", "gta6", "shorts", "tiktok", "whisper", "colab"]
 
@@ -24,7 +24,6 @@ dependencies = [
     "google-api-python-client>=2.130",
     "google-auth>=2.29",
     "google-auth-oauthlib>=1.2",
-    "pydrive2>=1.19",
     "yt-dlp>=2024.8.6",
     "pandas>=2.1",
     "numpy>=1.26",
@@ -41,6 +40,10 @@ cloud = [
     "opencv-python-headless>=4.9",
     "librosa>=0.10.2",
     "soundfile>=0.12",
+]
+# Voix off locale (render --voiceover). Séparé : piper-tts n'a pas toujours de wheel pour la version
+# de Python de Colab ; son échec d'installation ne doit pas bloquer scan/render.
+tts = [
     "piper-tts>=1.2",
 ]
 # Module watch (buffer live). Optionnel : consomme de la bande passante.
@@ -51,7 +54,7 @@ watch = [
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.12",
-    "ruff>=0.5",
+    "ruff==0.17.6",                 # version figée : mêmes règles en local et en CI
 ]
 
 [project.scripts]
@@ -64,7 +67,12 @@ packages = ["core", "modules"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Typer déclare ses options via des appels en valeur par défaut ; Optional[...] gardé pour la lisibilité CLI.
+"clipgod.py" = ["B008", "UP045"]

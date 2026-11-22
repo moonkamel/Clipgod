@@ -11,6 +11,7 @@ dist/
 
 # Secrets — JAMAIS commités
 .env
+secrets/
 client_secrets*.json
 *token*.json
 credentials*.json
@@ -30,6 +31,7 @@ cache/buffer/*
 data/sources.json
 data/state.json
 data/rejected.json
+data/campaigns.json
 data/model.pkl
 report.html
 *.mp4
