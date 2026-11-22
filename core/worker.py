@@ -220,6 +220,13 @@ def process_job(
     model = fetch_model(drive, root)
     if model is not None:
         scan_cfg["model_path"] = str(model)
+    # Transcription déjà faite lors d'un run précédent (session Kaggle/Colab coupée après whisper) :
+    # on la réutilise plutôt que de refaire l'étape la plus coûteuse.
+    transcript_remote = drive.remote("moments", f"{video_id}.transcript.json")
+    if "scan" in stages and not scan_cfg.get("transcript_path") and drive.exists(transcript_remote):
+        local_transcript = drive.download_file(transcript_remote, root / "transcript.json")
+        scan_cfg["transcript_path"] = str(local_transcript)
+        log.info("Transcription existante réutilisée : %s", drive.display(transcript_remote))
 
     started = time.perf_counter()
     source = fetch_source(drive, job, Path(workdir) / "sources",

@@ -223,9 +223,23 @@ La commande affiche le `job_id` et le lien du notebook.
 > Captures : les fichiers `docs/img/colab_0*.png` sont à produire lors du premier run réel du notebook
 > (étape 4 de la feuille de route) ; les emplacements sont déjà référencés ici.
 
-**Kaggle (alternative)** : importez `notebooks/clipgod_kaggle.ipynb`, activez *Settings → Accelerator → GPU T4 x2*
-et *Internet on*. Kaggle n'ayant pas de montage Drive natif, le notebook synchronise `ClipGod/` via l'API Drive
-et travaille dans `/kaggle/working`.
+**Kaggle (alternative, ≈ 30 h de GPU par semaine)**
+
+[![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/moonkamel/clipgod/blob/main/notebooks/clipgod_kaggle.ipynb)
+
+1. Importez `notebooks/clipgod_kaggle.ipynb`, ou utilisez le badge (repo public).
+2. Panneau de droite :
+   - *Accelerator* : **GPU T4 x2** ;
+   - *Internet* : **On**. Il faut un compte Kaggle vérifié par téléphone.
+3. *Add-ons › Secrets* : créez `CLIPGOD_GDRIVE_TOKEN_JSON` avec le **contenu** de `secrets/drive_token.json` du laptop.
+   Ce fichier est créé au premier `clipgod prepare` / `sync` en mode API. Ajoutez aussi `GITHUB_TOKEN` si le repo
+   est privé.
+4. **Run All**. Pour une longue VOD sans garder l'onglet ouvert : *Save Version › Save & Run All*, qui
+   s'exécute en arrière-plan jusqu'à 12 h.
+
+Kaggle n'a pas de Drive monté : le notebook passe par l'API Drive. Les checkpoints locaux disparaissent avec la
+session, mais une transcription déjà envoyée dans `ClipGod/moments/` est réutilisée à la relance. Le token n'est
+jamais écrit dans les sorties du notebook, et l'URL du repo cloné est nettoyée.
 
 Limites des offres gratuites à connaître : sessions Colab ~12 h max (souvent moins), déconnexion après inactivité,
 quota GPU variable ; Kaggle ~30 h GPU / semaine. Grâce aux checkpoints, un job interrompu reprend où il s'était arrêté.
@@ -359,7 +373,7 @@ pytest
 4. ✅ `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh` + `core/worker.py`
 5. ✅ `modules/render.py` + mise à jour du notebook
 6. ✅ `prepare` / `sync`
-7. Notebook Kaggle
+7. ✅ Notebook Kaggle
 8. `discover` · 9. `publish` · 10. `monetize` · 11. `learn`
 12. `watch`
 

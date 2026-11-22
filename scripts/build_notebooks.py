@@ -1,4 +1,4 @@
-"""Génère notebooks/clipgod_colab.ipynb à partir de ce script (source de vérité).
+"""Génère notebooks/clipgod_colab.ipynb et clipgod_kaggle.ipynb (source de vérité unique).
 
     python scripts/build_notebooks.py          # régénère
     python scripts/build_notebooks.py --check  # échoue si le notebook commité n'est pas à jour (CI / tests)
@@ -102,7 +102,10 @@ import subprocess
 def _git(*args, cwd=None):
     proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        raise RuntimeError(f"git {args[0]} a échoué : {proc.stderr.strip()}")
+        err = proc.stderr.strip()
+        if token:
+            err = err.replace(token, "***")        # ne jamais afficher le token
+        raise RuntimeError(f"git {args[0]} a échoué : {err}")
     return proc.stdout.strip()
 
 token = ""
@@ -118,11 +121,13 @@ if os.path.isdir(os.path.join(REPO_DIR, ".git")):
     _git("reset", "--hard", "FETCH_HEAD", cwd=REPO_DIR)
 else:
     _git("clone", "--depth", "1", "--branch", BRANCH, auth_url, REPO_DIR)
+# Le clone enregistre l'URL (avec le token) dans .git/config : on la remplace par l'URL publique.
+_git("remote", "set-url", "origin", REPO_URL, cwd=REPO_DIR)
 print("✅ ClipGod", BRANCH, "@", _git("rev-parse", "--short", "HEAD", cwd=REPO_DIR))
 """, form=True),
         code("install", """
 #@title 4️⃣ Installation des dépendances (≈ 1-2 min la première fois)
-!bash /content/clipgod/scripts/colab_setup.sh {"--with-tts" if VOICEOVER else ""}
+!bash {REPO_DIR}/scripts/colab_setup.sh {"--with-tts" if VOICEOVER else ""}
 """, form=True),
         code("init", """
 #@title 5️⃣ Initialisation
@@ -182,6 +187,11 @@ else:
 """, form=True),
         code("preview", """
 #@title 8️⃣ Aperçu des moments et du premier clip
+from base64 import b64encode
+from pathlib import Path
+
+from IPython.display import HTML
+
 for r in results:
     if r.get("status") != "done" or not r.get("moments"):
         continue
@@ -194,12 +204,9 @@ for r in results:
     ]))
     clips = r.get("clips") or []
     print(f"🎞️ {len(clips)} clip(s) dans ClipGod/clips/ :", ", ".join(c.split("/")[-1] for c in clips))
-    if clips:
-        from base64 import b64encode
-
-        from IPython.display import HTML
-        first = drive.root / clips[0]
-        data = b64encode(first.read_bytes()).decode()
+    local = Path(WORK_DIR) / r["job_id"] / "clips" / clips[0].split("/")[-1] if clips else None
+    if local is not None and local.is_file():   # copie locale du rendu : pas de relecture depuis Drive
+        data = b64encode(local.read_bytes()).decode()
         display(HTML(f'<video width=270 controls src="data:video/mp4;base64,{data}"></video>'))
 """, form=True),
         code("flush", """
@@ -209,6 +216,140 @@ gdrive.flush_and_unmount()
 print("✅ Résultats envoyés sur Drive. Sur le laptop : clipgod sync")
 """, form=True),
     ]
+
+
+KAGGLE_BADGE = (
+    f"https://kaggle.com/kernels/welcome?src=https://github.com/{REPO_SLUG}/blob/main/notebooks/clipgod_kaggle.ipynb"
+)
+
+_COLAB_TOKEN_BLOCK = '''token = ""
+try:
+    from google.colab import userdata
+    token = userdata.get("GITHUB_TOKEN") or ""
+except Exception:  # noqa: BLE001 — secret absent ou accès refusé : repo public
+    token = ""
+'''
+
+
+def kaggle_cells() -> list[dict]:
+    """Variante Kaggle : pas de montage Drive -> API Drive avec le token OAuth du laptop (secret Kaggle).
+
+    Les cellules communes sont reprises de :func:`colab_cells` (une seule source à maintenir).
+    """
+    shared = {c["id"]: c for c in colab_cells()}
+
+    def from_colab(cell_id: str, replacements: dict[str, str]) -> dict:
+        src = "".join(shared[cell_id]["source"])
+        for old, new in replacements.items():
+            if old not in src:
+                raise ValueError(f"cellule {cell_id} : texte introuvable {old!r}")
+            src = src.replace(old, new)
+        return code(cell_id, src)
+
+    return [
+        md("intro", f"""
+# 🎬 ClipGod — worker GPU (Kaggle)
+
+[![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)]({KAGGLE_BADGE})
+
+Alternative à Colab (≈ 30 h de GPU gratuites par semaine). Même rôle : traiter les jobs de **Google Drive ›
+`ClipGod/jobs/`** avec **scan** puis **render**, et écrire les clips dans `ClipGod/clips/`.
+
+**Réglages, une seule fois** (panneau de droite) :
+1. *Session options › Accelerator* : **GPU T4 x2** ; *Internet* : **On** (compte Kaggle vérifié par téléphone).
+2. *Add-ons › Secrets* (cochez-les pour ce notebook) :
+   - `CLIPGOD_GDRIVE_TOKEN_JSON` = contenu du fichier `secrets/drive_token.json` du laptop
+     (créé au premier `clipgod prepare` / `clipgod sync`) ;
+   - `GITHUB_TOKEN` (optionnel, seulement si le repo est privé).
+
+Puis **Run All**. Pour une longue VOD sans garder l'onglet ouvert : *Save Version › Save & Run All*
+(exécution en arrière-plan, jusqu'à 12 h). Ensuite, sur le laptop : `clipgod sync`.
+
+> Kaggle n'a pas de Drive monté : tout passe par l'API Drive (écritures immédiates, rien à synchroniser).
+> Si la session s'arrête après la transcription, la relance réutilise `ClipGod/moments/<id>.transcript.json`.
+"""),
+        code("params", """
+# ⚙️ Paramètres
+REPO_URL = "https://github.com/moonkamel/clipgod.git"
+BRANCH = "main"
+STAGES = "scan+render"          # "scan+render" | "scan" | "render"
+VOICEOVER = False               # voix off Piper
+MAX_JOBS = 0                    # 0 = tous
+ONLY_JOB = ""                   # vide = file normale
+WHISPER_MODEL = "auto"          # auto | large-v3 | medium | small
+REPO_DIR = "/kaggle/working/clipgod"
+WORK_DIR = "/tmp/clipgod_work"  # hors /kaggle/working (limité à 20 Go et archivé avec les outputs)
+"""),
+        from_colab("gpu", {
+            "#@title 1️⃣ Vérification du GPU": "# 1️⃣ Vérification du GPU",
+            "Exécution › Modifier le type d'exécution › GPU T4, puis relancez tout.":
+                "Session options › Accelerator › GPU T4 x2, puis Run All.",
+        }),
+        code("secrets", """
+# 2️⃣ Secrets Kaggle -> accès Google Drive par API
+import os
+import urllib.request
+
+from kaggle_secrets import UserSecretsClient
+
+_secrets = UserSecretsClient()
+
+
+def _secret(name):
+    try:
+        return _secrets.get_secret(name) or ""
+    except Exception:  # noqa: BLE001 — secret absent ou non attaché à ce notebook
+        return ""
+
+
+token_json = _secret("CLIPGOD_GDRIVE_TOKEN_JSON")
+if not token_json:
+    raise RuntimeError("❌ Secret CLIPGOD_GDRIVE_TOKEN_JSON manquant (Add-ons › Secrets) : collez le contenu de "
+                       "secrets/drive_token.json du laptop, cochez-le pour ce notebook, puis Run All.")
+os.environ["CLIPGOD_GDRIVE_TOKEN_JSON"] = token_json
+GITHUB_TOKEN = _secret("GITHUB_TOKEN")
+try:
+    urllib.request.urlopen("https://www.googleapis.com/discovery/v1/apis", timeout=15)
+except OSError as exc:
+    raise RuntimeError("❌ Pas d'accès Internet : Session options › Internet › On.") from exc
+print("✅ Token Drive chargé, Internet OK")
+"""),
+        from_colab("clone", {
+            "#@title 3️⃣ Récupération du code ClipGod": "# 3️⃣ Récupération du code ClipGod",
+            _COLAB_TOKEN_BLOCK: "token = GITHUB_TOKEN\n",
+        }),
+        from_colab("install", {
+            "#@title 4️⃣ Installation des dépendances (≈ 1-2 min la première fois)":
+                "# 4️⃣ Installation des dépendances (≈ 2 min)",
+        }),
+        from_colab("init", {
+            "#@title 5️⃣ Initialisation": "# 5️⃣ Initialisation",
+            "faites Exécution › Redémarrer la session.": "faites Run › Restart & clear cell outputs.",
+            "# Colab -> dossier monté /content/drive/MyDrive/ClipGod": "# Kaggle -> API Drive (token du secret)",
+        }),
+        from_colab("queue", {"#@title 6️⃣ Jobs en attente": "# 6️⃣ Jobs en attente"}),
+        from_colab("run", {"#@title 7️⃣ Traitement (scan puis render)": "# 7️⃣ Traitement (scan puis render)"}),
+        from_colab("preview", {"#@title 8️⃣ Aperçu des moments et du premier clip":
+                               "# 8️⃣ Aperçu des moments et du premier clip"}),
+        code("done", """
+# 9️⃣ Terminé
+print("✅ Résultats sur Google Drive (ClipGod/clips/). Sur le laptop : clipgod sync")
+"""),
+    ]
+
+
+def kaggle_notebook(cells: list[dict]) -> dict:
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kaggle": {"accelerator": "nvidiaTeslaT4", "isInternetEnabled": True, "isGpuEnabled": True,
+                       "language": "python", "sourceType": "notebook", "dataSources": []},
+            "kernelspec": {"name": "python3", "display_name": "Python 3", "language": "python"},
+            "language_info": {"name": "python"},
+        },
+        "cells": cells,
+    }
 
 
 def notebook(cells: list[dict]) -> dict:
@@ -229,7 +370,10 @@ def render_json(nb: dict) -> str:
     return json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
 
 
-TARGETS = {"notebooks/clipgod_colab.ipynb": lambda: notebook(colab_cells())}
+TARGETS = {
+    "notebooks/clipgod_colab.ipynb": lambda: notebook(colab_cells()),
+    "notebooks/clipgod_kaggle.ipynb": lambda: kaggle_notebook(kaggle_cells()),
+}
 
 
 def main(argv: list[str] | None = None) -> int:
