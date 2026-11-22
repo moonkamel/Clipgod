@@ -152,9 +152,42 @@ def render(
     moments: Path = typer.Option(..., "--moments", "-m", help="Fichier moments/<video_id>.json."),
     output_dir: Path = typer.Option(Path("output/clips"), "--output-dir", "-o"),
     voiceover: bool = typer.Option(False, "--voiceover", help="Voix off TTS Piper locale."),
+    only: Optional[int] = typer.Option(None, "--only", help="Ne rendre que le moment de rang N (1 = meilleur)."),
+    layout: Optional[str] = typer.Option(None, "--layout", help="auto | facecam | center."),
+    streamer: Optional[str] = typer.Option(None, "--streamer", help="Pseudo pour l'overlay @streamer."),
 ) -> None:
     """(cloud GPU) Rend les clips 1080x1920 -> clips/<video_id>_<idx>.mp4. Normalement exécuté dans le notebook."""
-    raise NotImplementedError("render : à implémenter (étape 5).")
+    import copy
+    import json
+
+    from modules.render import RenderError
+    from modules.render import render as run_render
+
+    cfg = copy.deepcopy(ctx.obj["config"])
+    rcfg = cfg.setdefault("render", {})
+    if voiceover:
+        rcfg.setdefault("voiceover", {})["enabled"] = True
+    if layout:
+        rcfg.setdefault("layout", {})["mode"] = layout
+    try:
+        doc = json.loads(moments.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[red]Fichier de moments illisible :[/] {exc}")
+        raise typer.Exit(1) from None
+    selected = doc.get("moments", [])
+    if only is not None:
+        selected = [m for m in selected if m.get("rank") == only]
+    cfg["job"] = {"video_id": doc.get("video_id"), "streamer": streamer or doc.get("streamer")}
+    try:
+        clips = run_render(selected, str(video), str(output_dir), cfg)
+    except (RenderError, FileNotFoundError) as exc:
+        console.print(f"[red]Rendu échoué :[/] {exc}")
+        raise typer.Exit(1) from None
+    for clip in clips:
+        console.print(f"[green]✔[/] {clip}")
+    if not clips:
+        console.print("[yellow]Aucun clip produit.[/]")
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

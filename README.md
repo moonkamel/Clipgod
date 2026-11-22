@@ -299,6 +299,28 @@ Re-scan local sans GPU, à partir d'une transcription existante :
 clipgod scan video.mp4 --transcript output/moments/<video_id>.transcript.json --streamer kaicenat
 ```
 
+## Comment `render` fabrique les clips
+
+| Élément | Détail |
+|---|---|
+| Layout | YuNet (OpenCV) analyse le moment à 2 fps. Un visage **stable et petit** est considéré comme la facecam du streamer : gameplay en haut (70 %), facecam en bas (30 %) sur fond flouté, avec une bande de flou entre les deux. Sinon : recadrage 9:16 plein écran, centré, qui suit en douceur un visage éventuel. |
+| Facecam forcée | `render.layout.facecam_regions: {kaicenat: [x, y, w, h]}` (coordonnées 0..1) quand la détection se trompe. |
+| Sous-titres | Mot à mot depuis les timestamps whisper : blocs de 3 mots maximum, mot courant en jaune, police Montserrat ExtraBold avec contour noir, à 64 % de la hauteur. |
+| Hook | Boîte blanche animée (*pop*) pendant les 2 premières secondes. **Une variante de clip par hook** pour l'A/B test : `<id>_<i>.mp4`, `<id>_<i>_h1.mp4`… |
+| Audio | `loudnorm` en deux passes : −14 LUFS mesurés. Voix off Piper en option (lit le hook et baisse le son d'origine pendant la lecture). |
+| Overlay | `@streamer` en bas pendant toute la durée. |
+| Encodage | H.264 1080×1920 à 30 fps : NVENC sur T4, libx264 en repli automatique. AAC 48 kHz, `+faststart`. |
+
+Chaque clip a un fichier `.json` voisin : hook, timing, score, signaux, layout et `transformations` appliquées.
+`monetize` s'en servira pour prouver que le clip n'est pas un simple re-upload. Un clip déjà rendu avec la
+même config est réutilisé, ce qui permet de reprendre après une interruption.
+
+Re-rendu local d'un moment, pour du debug :
+
+```bash
+clipgod render source.mp4 -m output/moments/<video_id>.json --only 1 --layout center --streamer kaicenat
+```
+
 ## Robustesse
 
 - Logs structurés dans `logs/clipgod.log` + console.
@@ -317,7 +339,7 @@ pytest
 2. ✅ `core/config.py`, `core/drive.py`, `core/logger.py`, `core/storage.py`
 3. ✅ `modules/scan.py` + `core/scoring.py`
 4. ✅ `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh` + `core/worker.py`
-5. `modules/render.py` + mise à jour du notebook
+5. ✅ `modules/render.py` + mise à jour du notebook
 6. `prepare` / `sync`
 7. Notebook Kaggle
 8. `discover` · 9. `publish` · 10. `monetize` · 11. `learn`

@@ -89,11 +89,18 @@ def ensure_project_dirs(cfg: Mapping[str, Any]) -> dict[str, Path]:
 # ---------------------------------------------------------------------------
 # I/O atomiques
 # ---------------------------------------------------------------------------
+def _umask() -> int:
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
+
 def atomic_write_bytes(path: str | os.PathLike, data: bytes) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
     try:
+        os.chmod(tmp_name, 0o666 & ~_umask())     # mkstemp crée en 0600 : permissions habituelles
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()

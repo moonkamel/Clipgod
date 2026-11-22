@@ -59,8 +59,10 @@ Ce notebook traite les jobs déposés par le laptop (`clipgod prepare`) dans **G
 #@title ⚙️ Paramètres { display-mode: "form" }
 REPO_URL = "https://github.com/moonkamel/clipgod.git"  #@param {type:"string"}
 BRANCH = "main"  #@param {type:"string"}
-#@markdown Étapes à exécuter (render sera disponible à l'étape 5 de la feuille de route) :
-STAGES = "scan"  #@param ["scan", "scan+render", "render"]
+#@markdown Étapes : `scan+render` (normal), `scan` seul, ou `render` seul (re-rendu depuis moments/ existants) :
+STAGES = "scan+render"  #@param ["scan+render", "scan", "render"]
+#@markdown Voix off Piper (lit le hook au début du clip) pour tous les jobs de ce run :
+VOICEOVER = False  #@param {type:"boolean"}
 #@markdown Nombre max de jobs à traiter (0 = tous) et job précis (vide = file normale) :
 MAX_JOBS = 0  #@param {type:"integer"}
 ONLY_JOB = ""  #@param {type:"string"}
@@ -120,7 +122,7 @@ print("✅ ClipGod", BRANCH, "@", _git("rev-parse", "--short", "HEAD", cwd=REPO_
 """, form=True),
         code("install", """
 #@title 4️⃣ Installation des dépendances (≈ 1-2 min la première fois)
-!bash /content/clipgod/scripts/colab_setup.sh
+!bash /content/clipgod/scripts/colab_setup.sh {"--with-tts" if VOICEOVER else ""}
 """, form=True),
         code("init", """
 #@title 5️⃣ Initialisation
@@ -159,7 +161,9 @@ else:
 stages = {"scan": ("scan",), "scan+render": ("scan", "render"), "render": ("render",)}[STAGES]
 overrides = {}
 if WHISPER_MODEL != "auto":
-    overrides = {"scan": {"whisper": {"model": WHISPER_MODEL}}}
+    overrides["scan"] = {"whisper": {"model": WHISPER_MODEL}}
+if VOICEOVER:
+    overrides["render"] = {"voiceover": {"enabled": True}}
 
 results = worker.run_queue(
     drive, cfg,
@@ -177,7 +181,7 @@ else:
     print("📭 Rien à traiter.")
 """, form=True),
         code("preview", """
-#@title 8️⃣ Aperçu des moments détectés
+#@title 8️⃣ Aperçu des moments et du premier clip
 for r in results:
     if r.get("status") != "done" or not r.get("moments"):
         continue
@@ -188,6 +192,15 @@ for r in results:
          "raison": m["reason"], "hooks": " | ".join(m["hooks"])}
         for m in doc["moments"]
     ]))
+    clips = r.get("clips") or []
+    print(f"🎞️ {len(clips)} clip(s) dans ClipGod/clips/ :", ", ".join(c.split("/")[-1] for c in clips))
+    if clips:
+        from base64 import b64encode
+
+        from IPython.display import HTML
+        first = drive.root / clips[0]
+        data = b64encode(first.read_bytes()).decode()
+        display(HTML(f'<video width=270 controls src="data:video/mp4;base64,{data}"></video>'))
 """, form=True),
         code("flush", """
 #@title 9️⃣ Synchroniser Drive avant de fermer

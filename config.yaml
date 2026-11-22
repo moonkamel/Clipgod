@@ -163,40 +163,63 @@ render:
   width: 1080
   height: 1920
   fps: 30
-  codec: libx264
-  crf: 20
-  preset: medium
+  encoder: auto                     # auto (h264_nvenc si GPU, sinon libx264) | h264_nvenc | libx264
+  nvenc_preset: p5
+  nvenc_cq: 21
+  crf: 20                           # libx264
+  preset: medium                    # libx264
   audio_bitrate: 192k
   loudness_lufs: -14
+  ab_variants: true                 # un clip par hook (A/B test) ; false = seulement le 1er hook
+  cache_dir: null                   # modèles/polices téléchargés ; défaut ~/.cache/clipgod
   layout:
+    mode: auto                      # auto (facecam détectée ?) | facecam | center
     facecam_detector: yunet
     yunet_model_url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    face_score_threshold: 0.7
+    analysis_fps: 2
+    facecam_min_ratio: 0.5          # visage présent et immobile dans >= 50 % des frames
+    facecam_max_face_width: 0.25    # au-delà : plein écran (IRL/cinématique), pas une incrustation
+    facecam_position_tolerance: 0.05
+    facecam_zoom: 2.6               # cadre facecam = 2,6 x la hauteur du visage
+    facecam_regions: {}             # forçage par streamer : {kaicenat: [x, y, w, h]} normalisés 0..1
     gameplay_ratio: 0.70            # gameplay en haut 70%
     facecam_ratio: 0.30             # facecam en bas 30%
     separator_blur: 25
-    smoothing_alpha: 0.15           # lissage du recadrage
+    separator_height: 48
+    smoothing_alpha: 0.15           # lissage EMA du recadrage centré
+    track_min_face_width: 0.08
   subtitles:
-    font: "Montserrat-ExtraBold"
+    font_name: "Montserrat ExtraBold"
+    font_url: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-ExtraBold.ttf"
     font_size: 86
     outline: 6
     y_position_ratio: 0.64
     uppercase: true
-    highlight_color: "&H0000FFFF"   # ASS BGR (jaune)
+    max_words: 3
+    max_chars: 18
+    color: white
+    highlight_color: "&H0000E6FF"   # ASS &H00BBGGRR (jaune) ou #RRGGBB
   hook:
     duration_seconds: 2.0
     font_size: 72
-    box_color: "white"
-    text_color: "black"
-    animation: pop
+    box_color: white
+    text_color: black
+    box_padding: 18
+    y_position_ratio: 0.20
+    animation: pop                  # pop | slide | none
+    strip_emoji: true               # libass n'affiche pas les emojis couleur
   streamer_overlay:
     enabled: true
     template: "@{streamer}"
     font_size: 44
     y_position_ratio: 0.94
   voiceover:
-    enabled: false                  # flag --voiceover
+    enabled: false                  # flag --voiceover (prepare) / options.voiceover du job
     engine: piper
     voice: "en_US-ryan-high"
+    voices_base_url: "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+    duck_volume: 0.3                # volume du son d'origine pendant la voix off
 
 # ---------------------------------------------------------------------
 # Module 5 — publish (laptop)

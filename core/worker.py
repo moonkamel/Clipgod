@@ -224,6 +224,9 @@ def process_job(
             remote = drive.remote("clips", Path(clip).name)
             drive.upload_file(clip, remote)
             result["clips"].append(remote)
+            sidecar = Path(clip).with_suffix(".json")       # métadonnées lues par monetize / publish
+            if sidecar.is_file():
+                drive.upload_file(sidecar, drive.remote("clips", sidecar.name))
         result["stages"].append("render")
 
     result["duration_s"] = round(time.perf_counter() - started, 1)
