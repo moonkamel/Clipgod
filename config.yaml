@@ -21,6 +21,7 @@ paths:
   historical_scores: data/historical_scores.csv
   model: data/model.pkl
   rejected: data/rejected.json
+  campaigns_json: data/campaigns.json
   state: data/state.json          # état local (jobs envoyés, clips synchronisés, checkpoints)
   report: report.html
 
@@ -285,15 +286,23 @@ publish:
 # ---------------------------------------------------------------------
 monetize:
   whop_rewards_url: "https://whop.com/discover/content-rewards/"
+  campaign_url_template: "https://whop.com/{slug}/"   # pour les lignes whop:<slug> de campaigns.txt
+  manual_file: data/whop_campaigns.yaml   # saisie manuelle : prime toujours sur le scraping
+  cache_file: data/campaigns.json
   scrape_cache_seconds: 1800
+  delay_seconds: 1.0                # scraping léger : 1 page/seconde maximum
   user_agent: "Mozilla/5.0 (compatible; ClipGod/0.1)"
-  min_cpm_usd: 0.5
+  min_cpm: 0.5
   min_budget_remaining_usd: 100
+  prior_views_per_clip: 2000        # vues attendues par clip tant qu'il n'y a pas d'historique
+  clips_per_vod_hour: 3             # clips validés par heure de VOD tant qu'il n'y a pas d'historique
   rules_default:
     min_duration_seconds: 7
     max_duration_seconds: 30
     hook_within_seconds: 1.0
     require_transformation: true    # pas de simple re-upload
+    min_editorial_transformations: 2
+    vertical_only: true
 
 # ---------------------------------------------------------------------
 # Module 7 — learn (laptop, CPU)

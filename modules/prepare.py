@@ -280,7 +280,8 @@ def prepare(
     }
     drive.write_json(drive.remote("jobs", f"{jid}.json"), job)
     state.upsert_job(jid, status="queued", video_id=src.video_id, platform=src.platform, source=source,
-                     streamer=src.streamer, campaign=campaign, download=mode, model_pushed=model_pushed)
+                     streamer=src.streamer, campaign=campaign, download=mode, model_pushed=model_pushed,
+                     source_duration=src.duration)
     if local_download is not None and not pcfg.get("keep_local_download", False):
         local_download.unlink(missing_ok=True)
     log.info("Job %s déposé dans %s", jid, drive.display(drive.remote("jobs", f"{jid}.json")))

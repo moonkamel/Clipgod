@@ -130,6 +130,7 @@ def sync(cfg: Mapping[str, Any], drive: DriveBackend, *, job_id: str | None = No
 def _sync_job(drive: DriveBackend, row: JobStatus, clips_dir: Path, moments_dir: Path, state: StateStore,
               report: SyncReport, *, cleanup: bool) -> None:
     done = drive.read_json(drive.remote("jobs_done", f"{row.job_id}.json"))
+    job = drive.read_json(drive.remote("jobs", f"{row.job_id}.json"), default={}) or {}
     video_id = str(done.get("video_id") or row.video_id)
 
     moments_remote = done.get("moments") or drive.remote("moments", f"{video_id}.json")
@@ -155,16 +156,15 @@ def _sync_job(drive: DriveBackend, row: JobStatus, clips_dir: Path, moments_dir:
             "path": str(mp4), "job_id": row.job_id, "video_id": video_id,
             "hook": meta.get("hook"), "variant": meta.get("variant", 0), "moment_idx": meta.get("moment_idx"),
             "duration": meta.get("duration"), "score": meta.get("score"), "streamer": meta.get("streamer"),
-            "synced_at": utc_now_iso(),
+            "campaign": job.get("campaign"), "synced_at": utc_now_iso(),
         }
         if existing.get("status") in (None, "synced"):
             fields["status"] = "synced"           # ne rétrograde pas un clip déjà validé / publié
         state.upsert_clip(mp4.stem, **fields)
 
     state.upsert_job(row.job_id, status="synced", video_id=video_id, clips=len(done.get("clips") or []),
-                     synced_at=utc_now_iso())
+                     synced_at=utc_now_iso(), **({"source_duration": job["duration"]} if job.get("duration") else {}))
     if cleanup:
-        job = drive.read_json(drive.remote("jobs", f"{row.job_id}.json"), default={}) or {}
         src = job.get("source_drive_path")
         if src and drive.exists(src):
             drive.delete(src)

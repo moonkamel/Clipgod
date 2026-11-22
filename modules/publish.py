@@ -35,7 +35,15 @@ from core.config import ConfigError, get, get_env, path, resolve_path
 from core.logger import get_logger
 from core.quota import QuotaExceeded, YouTubeQuota
 from core.storage import StateStore, atomic_write_text, read_json, utc_now, utc_now_iso
-from modules.monetize import Rules, record_rejection, validate_clip
+from modules.monetize import (
+    Campaign,
+    Rules,
+    fetch_campaigns,
+    match_campaign,
+    record_rejection,
+    rules_for,
+    validate_clip,
+)
 
 log = get_logger(__name__)
 
@@ -55,6 +63,7 @@ class ClipInfo:
     clip_id: str
     path: Path
     meta: dict[str, Any]
+    rules: Rules | None = None                 # règles de la campagne du clip (hashtags, plateformes…)
 
     @property
     def group(self) -> str:
@@ -102,15 +111,20 @@ class Backend(Protocol):
 # Métadonnées de publication
 # ---------------------------------------------------------------------------
 def build_metadata(clip: ClipInfo, pcfg: Mapping[str, Any]) -> tuple[str, str, list[str]]:
-    """Titre (hook + hashtags, <= 100 car.), description avec crédit du streamer, tags."""
-    hashtags = list(pcfg.get("hashtags") or ["#gta6", "#gtavi", "#shorts"])
+    """Titre (hook + hashtags, <= 100 car.), description avec crédit du streamer, tags.
+
+    Les hashtags et mentions **exigés par la campagne** passent en premier (titre = légende sur TikTok/Instagram).
+    """
+    required = list(clip.rules.required_hashtags) if clip.rules else []
+    mentions = list(clip.rules.required_mentions) if clip.rules else []
+    hashtags = list(dict.fromkeys([*required, *(pcfg.get("hashtags") or ["#gta6", "#gtavi", "#shorts"])]))
     hook = re.sub(r"\s+", " ", str(clip.meta.get("hook") or "GTA 6 moment")).strip()
-    suffix = " " + " ".join(hashtags[:2])
+    suffix = " " + " ".join([*mentions, *hashtags[: max(2, len(required))]])
     title = (hook[: 100 - len(suffix)].rstrip() + suffix).strip()
     streamer = str(clip.meta.get("streamer") or "").lstrip("@")
     credit = str(pcfg.get("credit_template", "🎮 Credit: @{streamer}")).format(streamer=streamer) if streamer else ""
     lines = [hook, "", credit, f"Source: {clip.meta['source_url']}" if clip.meta.get("source_url") else "",
-             "", " ".join(hashtags)]
+             " ".join(mentions), "", " ".join(hashtags)]
     description = "\n".join(line for line in lines if line is not None).strip()
     tags = [h.lstrip("#") for h in hashtags] + ([streamer] if streamer else []) + ["GTA 6", "GTA VI"]
     return title, description[:4900], list(dict.fromkeys(tags))
@@ -172,9 +186,10 @@ def plan_posts(clips: Sequence[ClipInfo], platforms: Sequence[str], *, already: 
             if k >= len(g):
                 continue
             clip = g[k]
+            allowed = set(clip.rules.platforms) if clip.rules and clip.rules.platforms else set(platforms)
             for offset in range(len(platforms)):
                 platform = platforms[(k + offset) % len(platforms)]
-                if f"{clip.clip_id}@{platform}" not in already:
+                if platform in allowed and f"{clip.clip_id}@{platform}" not in already:
                     plan.append((clip, platform))
                     break
     return plan
@@ -351,7 +366,10 @@ def load_candidates(cfg: Mapping[str, Any], state: StateStore, clip: str | Path 
         if not p.is_file():
             log.warning("Clip %s : fichier absent (%s), relancez clipgod sync.", clip_id, p)
             continue
-        out.append(ClipInfo(clip_id, p, read_json(p.with_suffix(".json"), default={}) or {}))
+        meta = read_json(p.with_suffix(".json"), default={}) or {}
+        if entry.get("campaign") and not meta.get("campaign"):
+            meta["campaign"] = entry["campaign"]
+        out.append(ClipInfo(clip_id, p, meta))
     return out
 
 
@@ -365,11 +383,16 @@ def publish(cfg: Mapping[str, Any], *, clip: str | Path | None = None, platforms
     now = now or utc_now()
 
     candidates = load_candidates(cfg, state, clip)
+    campaigns = _campaigns(cfg) if pcfg.get("use_campaign_rules", True) else []
+    for c in candidates:
+        campaign = match_campaign(campaigns, slug=c.meta.get("campaign"), streamer=c.meta.get("streamer"))
+        c.rules = rules_for(cfg, campaign)
+        if campaign:
+            c.meta["campaign"] = campaign.slug
     if not skip_validation:
-        rules = Rules.from_config(cfg)
         valid = []
         for c in candidates:
-            result = validate_clip({"clip_id": c.clip_id, **c.meta}, rules, c.path)
+            result = validate_clip({"clip_id": c.clip_id, **c.meta}, c.rules or Rules.from_config(cfg), c.path)
             if result.ok:
                 valid.append(c)
                 if not dry_run:
@@ -377,7 +400,7 @@ def publish(cfg: Mapping[str, Any], *, clip: str | Path | None = None, platforms
             else:
                 report.rejected.append((c.clip_id, result.reasons))
                 if not dry_run:
-                    record_rejection(cfg, result)
+                    record_rejection(cfg, result, campaign=c.meta.get("campaign"))
                     state.upsert_clip(c.clip_id, status="rejected", rejected_reasons=result.reasons)
         candidates = valid
 
@@ -430,7 +453,8 @@ def publish(cfg: Mapping[str, Any], *, clip: str | Path | None = None, platforms
         entry = {"clip_id": c.clip_id, "platform": platform, "backend": getattr(backends[platform], "name", "?"),
                  "slot": slot.isoformat() if slot else None, "status": result.status, "remote_id": result.remote_id,
                  "url": result.url, "privacy": result.privacy, "test": test, "title": title,
-                 "hook": c.meta.get("hook"), "variant": c.variant, "group": c.group, "posted_at": utc_now_iso()}
+                 "hook": c.meta.get("hook"), "variant": c.variant, "group": c.group, "campaign": c.meta.get("campaign"),
+                 "posted_at": utc_now_iso()}
         report.posted.append({"post_id": post.post_id, **entry})
         if dry_run or result.status == "planned":
             continue
@@ -440,6 +464,15 @@ def publish(cfg: Mapping[str, Any], *, clip: str | Path | None = None, platforms
                           last_post=post.post_id)
         log.info("✔ %s -> %s (%s)", c.clip_id, platform, result.url or result.status)
     return report
+
+
+def _campaigns(cfg: Mapping[str, Any]) -> list[Campaign]:
+    """Campagnes connues (cache/manuel ; scraping seulement si le cache a expiré). Jamais bloquant."""
+    try:
+        return fetch_campaigns(cfg, allow_scrape=False)      # le scraping se fait via `clipgod monetize`
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Campagnes indisponibles (%s) : règles par défaut.", exc)
+        return []
 
 
 def _parse(value: Any) -> datetime | None:

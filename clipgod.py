@@ -378,12 +378,64 @@ def publish(
 @app.command()
 def monetize(
     ctx: typer.Context,
-    refresh: bool = typer.Option(False, "--refresh", help="Force le re-scraping des campagnes."),
-    validate: Optional[Path] = typer.Option(None, "--validate", help="Valide un clip contre les règles."),
+    refresh: bool = typer.Option(False, "--refresh", help="Force le re-scraping des campagnes Whop."),
+    validate: Optional[Path] = typer.Option(None, "--validate", help="Valide un clip (.mp4) contre les règles."),
+    campaign: Optional[str] = typer.Option(None, "--campaign", help="Campagne pour --validate (slug)."),
     top: int = typer.Option(10, "--top", help="Nombre de campagnes affichées."),
+    all_: bool = typer.Option(False, "--all", help="Affiche aussi les campagnes exclues."),
 ) -> None:
     """Classe les campagnes Whop par $/heure estimé et valide les clips (-> data/rejected.json)."""
-    raise NotImplementedError("monetize : à implémenter (étape 10).")
+    from rich.table import Table
+
+    from core.storage import read_json
+    from modules.monetize import (
+        fetch_campaigns,
+        match_campaign,
+        rank_campaigns,
+        record_rejection,
+        rules_for,
+        validate_clip,
+    )
+
+    cfg = ctx.obj["config"]
+    campaigns = fetch_campaigns(cfg, refresh=refresh, allow_scrape=not ctx.obj.get("dry_run"))
+    if validate is not None:
+        meta = read_json(validate.with_suffix(".json"), default={}) or {}
+        chosen = match_campaign(campaigns, slug=campaign or meta.get("campaign"), streamer=meta.get("streamer"))
+        result = validate_clip({"clip_id": validate.stem, **meta}, rules_for(cfg, chosen), validate)
+        label = f" (campagne {chosen.slug})" if chosen else " (règles par défaut)"
+        if result.ok:
+            console.print(f"[green]✔ {validate.name} valide{label}[/]")
+            return
+        record_rejection(cfg, result, campaign=chosen.slug if chosen else None)
+        console.print(f"[red]✖ {validate.name} refusé{label} :[/]")
+        for reason in result.reasons:
+            console.print(f"  - {reason}")
+        raise typer.Exit(1)
+
+    rows = rank_campaigns(cfg, campaigns)
+    shown = [r for r in rows if r["eligible"] or all_][:top]
+    if not rows:
+        console.print("[yellow]Aucune campagne trouvée.[/] Ajoutez-en dans data/whop_campaigns.yaml ou des lignes "
+                      "whop:<slug> dans data/campaigns.txt, puis clipgod monetize --refresh.")
+        return
+    table = Table(title="Campagnes de clipping (classées par $/heure de VOD estimé)")
+    for col in ("campagne", "CPM $", "budget restant $", "vues/clip", "$/clip", "$/heure", "plateformes", "règles", "note"):
+        table.add_column(col, overflow="fold")
+    for r in shown:
+        table.add_row(r["name"], f"{r['cpm_usd']:.2f}" if r["cpm_usd"] is not None else "?",
+                      f"{r['budget_remaining_usd']:,.0f}".replace(",", " ") if r["budget_remaining_usd"] is not None else "?",
+                      f"{r['expected_views']} ({r['views_source']})", f"{r['usd_per_clip']:.2f}",
+                      f"[bold]{r['usd_per_hour']:.2f}[/]", ", ".join(r["platforms"]) or "toutes", r["rules"],
+                      ", ".join(r["excluded_because"]) or r["source"])
+    console.print(table)
+    hidden = len([r for r in rows if not r["eligible"]])
+    if hidden and not all_:
+        console.print(f"[dim]{hidden} campagne(s) exclue(s) (CPM/budget/inactive) : --all pour les voir.[/]")
+    best = next((r for r in rows if r["eligible"]), None)
+    if best:
+        console.print(f"→ Meilleure campagne : [bold]{best['name']}[/] — clipgod prepare --source <url> "
+                      f"--campaign {best['slug']}")
 
 
 # ---------------------------------------------------------------------------

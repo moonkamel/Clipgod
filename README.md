@@ -314,6 +314,33 @@ Le quota YouTube est vérifié avant chaque upload (1 600 unités sur 10 000 par
 est épuisé, YouTube est mis en pause pour le run et les autres plateformes continuent. Chaque post est enregistré
 dans `data/state.json` (plateforme, créneau, URL) : un clip n'est jamais publié deux fois sur la même plateforme.
 
+### Choisir ses campagnes — `monetize`
+
+```bash
+clipgod monetize --refresh        # scrape Whop Content Rewards (cache 30 min) et classe les campagnes
+clipgod monetize --all            # inclut les campagnes exclues (CPM trop bas, budget épuisé, inactive)
+clipgod monetize --validate output/clips/<clip>.mp4 --campaign kai-gta6
+clipgod prepare --source <url> --campaign kai-gta6     # rattache les clips de cette VOD à la campagne
+```
+
+- **Sources** : la page publique Content Rewards, plus une page par campagne suivie (lignes `whop:<slug>` de
+  `data/campaigns.txt`). Le scraping est léger : 1 page par seconde maximum, avec cache.
+  - L'extraction lit d'abord les données JSON embarquées par la page, puis le texte visible (« $1.50 per 1K
+    views », « max 60 seconds », `#hashtag`, `@mention`…).
+  - **Le site de Whop évolue** : si l'extraction rate une campagne, ajoutez-la dans **`data/whop_campaigns.yaml`**.
+    Cette saisie manuelle prime toujours sur le scraping.
+- **Classement en $/heure de VOD** = vues attendues par clip × CPM ÷ 1000 × clips par heure de VOD, plafonné par
+  le budget restant.
+  - Vues attendues : la médiane de `historical_scores.csv` pour cette campagne, sinon toutes campagnes
+    confondues, sinon `prior_views_per_clip`.
+  - Clips par heure de VOD : mesuré sur vos jobs, sinon `clips_per_vod_hour`.
+- **Règles par campagne**, appliquées par `publish` :
+  - durées min/max, sous-titres exigés ;
+  - plateformes autorisées (les autres sont sautées) ;
+  - hashtags et mentions obligatoires, ajoutés automatiquement au titre et à la description.
+
+  Un clip sans campagne explicite est rattaché à celle qui cible son streamer (`streamers:`).
+
 ### 6. Apprendre — laptop (périodique)
 
 ```bash
@@ -422,7 +449,7 @@ pytest
 5. ✅ `modules/render.py` + mise à jour du notebook
 6. ✅ `prepare` / `sync`
 7. ✅ Notebook Kaggle
-8. ✅ `discover` · 9. ✅ `publish` · 10. `monetize` · 11. `learn`
+8. ✅ `discover` · 9. ✅ `publish` · 10. ✅ `monetize` · 11. `learn`
 12. `watch`
 
 ## Usage responsable

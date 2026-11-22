@@ -1,0 +1,18 @@
+# Campagnes saisies à la main (prioritaires sur le scraping Whop).
+# Copiez les infos depuis la page de la campagne sur whop.com. Tous les champs sont optionnels sauf slug.
+#
+# - slug: kaicenat-gta6                 # identifiant (utilisé par prepare --campaign kaicenat-gta6)
+#   name: "Kai Cenat GTA 6 clips"
+#   url: "https://whop.com/..."
+#   cpm_usd: 1.5                        # $ pour 1000 vues
+#   budget_total_usd: 20000
+#   budget_remaining_usd: 12500
+#   platforms: [tiktok, youtube_shorts, instagram_reels]
+#   streamers: [kaicenat]               # clips de ces streamers rattachés automatiquement
+#   max_duration_seconds: 60
+#   min_duration_seconds: 10
+#   require_subtitles: true
+#   required_hashtags: ["#kaicenat", "#gta6"]
+#   required_mentions: ["@kaicenat"]
+#   active: true
+[]
