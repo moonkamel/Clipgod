@@ -177,8 +177,17 @@ La commande affiche le `job_id` et le lien du notebook.
 
    ![Autorisation Google Drive](docs/img/colab_03_mount_drive.png)
 
-4. Le notebook clone ce dépôt, installe les dépendances (`scripts/colab_setup.sh`), prend le premier job
-   non traité, puis exécute `scan` et `render`. La progression s'affiche dans la dernière cellule.
+4. Le notebook clone ce dépôt, installe les dépendances (`scripts/colab_setup.sh`), prend les jobs
+   en attente du plus ancien au plus récent, puis exécute `scan` et `render`. La progression s'affiche dans la
+   cellule 7️⃣, et la cellule 8️⃣ montre les moments détectés avec leurs hooks.
+
+   Paramètres (cellule ⚙️) :
+   - `BRANCH` : branche à cloner. Mettez celle où se trouve le code tant qu'il n'est pas fusionné dans `main`.
+   - `STAGES` : `scan`, `scan+render` ou `render`.
+   - `MAX_JOBS`, `ONLY_JOB` : limiter le traitement à quelques jobs ou à un job précis.
+   - `WHISPER_MODEL` : modèle forcé (`auto` par défaut).
+
+   **Repo privé** : ajoutez un secret Colab `GITHUB_TOKEN` (icône 🔑, jeton en lecture seule).
 
    ![Progression scan + render](docs/img/colab_04_progress.png)
 
@@ -186,6 +195,16 @@ La commande affiche le `job_id` et le lien du notebook.
    marqueur `ClipGod/jobs_done/<job_id>.json` sont créés. Le notebook traite les jobs suivants en file s'il en reste.
 
    ![Résultats dans Drive](docs/img/colab_05_results.png)
+
+**Comportement du worker** (`core/worker.py`) :
+- **Réservation** : chaque job est réservé via `ClipGod/jobs/<job_id>.lock` (bail de 3 h). Deux sessions,
+  par exemple Colab et Kaggle, ne traitent donc pas le même job.
+- **Échec** : le job reste en file et sera retenté au run suivant. Au 2ᵉ échec, ou si le job est invalide,
+  il est marqué `failed` dans `jobs_done/` avec l'erreur.
+- **Checkpoints** : ceux du scan sont écrits sur Drive (`ClipGod/moments/.work/`). Après une déconnexion,
+  relancez *Tout exécuter* : la transcription déjà faite n'est pas refaite.
+- **Poids appris** : si `ClipGod/model.pkl` existe (déposé par le laptop après `clipgod learn`), il est
+  utilisé automatiquement.
 
 > Captures : les fichiers `docs/img/colab_0*.png` sont à produire lors du premier run réel du notebook
 > (étape 4 de la feuille de route) ; les emplacements sont déjà référencés ici.
@@ -297,7 +316,7 @@ pytest
 1. ✅ Squelette : arborescence, `pyproject.toml`, `config.yaml`, README, CLI Typer
 2. ✅ `core/config.py`, `core/drive.py`, `core/logger.py`, `core/storage.py`
 3. ✅ `modules/scan.py` + `core/scoring.py`
-4. `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh`
+4. ✅ `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh` + `core/worker.py`
 5. `modules/render.py` + mise à jour du notebook
 6. `prepare` / `sync`
 7. Notebook Kaggle

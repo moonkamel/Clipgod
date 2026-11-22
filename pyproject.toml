@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Transforme streams et VODs GTA 6 en clips verticaux monétisables. Orchestration locale + calcul lourd sur GPU cloud gratuit (Colab/Kaggle) via Google Drive."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "ClipGod contributors" }]
 keywords = ["clipping", "gta6", "shorts", "tiktok", "whisper", "colab"]
 
@@ -40,6 +40,10 @@ cloud = [
     "opencv-python-headless>=4.9",
     "librosa>=0.10.2",
     "soundfile>=0.12",
+]
+# Voix off locale (render --voiceover). Séparé : piper-tts n'a pas toujours de wheel pour la version
+# de Python de Colab ; son échec d'installation ne doit pas bloquer scan/render.
+tts = [
     "piper-tts>=1.2",
 ]
 # Module watch (buffer live). Optionnel : consomme de la bande passante.

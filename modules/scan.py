@@ -230,8 +230,36 @@ def _run_whisper(model: Any, audio_path: str, wcfg: Mapping[str, Any]) -> dict[s
     }
 
 
+def preload_cuda_libs() -> int:
+    """Précharge cuBLAS/cuDNN des wheels ``nvidia-*`` (installées avec torch sur Colab/Kaggle).
+
+    ctranslate2 (moteur de faster-whisper) cherche ``libcudnn_ops.so.9`` & co. dans LD_LIBRARY_PATH, où elles
+    ne sont pas : erreur « Unable to load libcudnn_ops.so.9 ». LD_LIBRARY_PATH ne peut plus être modifié
+    une fois le process lancé, donc on charge les .so en RTLD_GLOBAL. Retourne le nombre de libs chargées.
+    """
+    import ctypes
+    import importlib
+
+    loaded = 0
+    for name in ("nvidia.cublas", "nvidia.cudnn"):
+        try:
+            pkg = importlib.import_module(name)
+        except ImportError:
+            continue
+        for base in getattr(pkg, "__path__", []):
+            for so in sorted((Path(base) / "lib").glob("lib*.so*")):
+                try:
+                    ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
+                    loaded += 1
+                except OSError as exc:
+                    log.debug("préchargement %s impossible : %s", so.name, exc)
+    return loaded
+
+
 def transcribe(audio_path: str, wcfg: Mapping[str, Any]) -> dict[str, Any]:
     """Transcrit avec faster-whisper ; en cas d'OOM GPU, retente avec un modèle plus petit."""
+    if _cuda_device_count() > 0:
+        preload_cuda_libs()
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
