@@ -344,11 +344,32 @@ clipgod prepare --source <url> --campaign kai-gta6     # rattache les clips de c
 ### 6. Apprendre — laptop (périodique)
 
 ```bash
-clipgod learn                # collecte vues 1h/6h/24h/72h, réentraîne si ≥ 20 nouveaux clips ou 7 jours, report.html
+clipgod learn                # mesure les vues, met à jour historical_scores.csv, réentraîne si besoin, report.html
 clipgod learn --retrain      # force le réentraînement
 ```
 
-`data/model.pkl` est envoyé avec le job suivant : le prochain `scan` utilise automatiquement les nouveaux poids.
+Lancez-le idéalement **1 h, 6 h, 24 h et 72 h après vos publications**. Les horaires peuvent être irréguliers :
+chaque exécution ajoute une mesure, et les vues aux checkpoints sont **interpolées** entre deux mesures, jamais
+extrapolées.
+
+| Source des vues | Comment |
+|---|---|
+| YouTube | API officielle (1 unité de quota pour 50 vidéos). Les vidéos privées du mode test sont visibles via le token OAuth de `publish`. |
+| TikTok / Instagram | `publish.upload_post.analytics_endpoint` si votre offre Upload-Post l'expose, sinon saisie dans `data/manual_views.csv` (`url,views,measured_at`). |
+
+- **Historique** : `data/historical_scores.csv`, une ligne par post (`clip_id, signals, hook, platform,
+  views_1h, views_6h, views_24h, views_72h`, plus la campagne, la variante, l'URL…).
+- **Modèle** : un GradientBoostingRegressor qui prédit, à partir des signaux du moment, `log(vues)` moins la
+  médiane de la plateforme. Il est réentraîné tous les 20 nouveaux clips ou chaque semaine (à partir de 10 clips
+  mesurés), puis écrit dans `data/model.pkl` et **envoyé sur Drive** : le prochain `scan`, sur Colab, Kaggle ou en
+  local, l'utilise automatiquement. Son poids dans le score augmente avec le nombre de clips d'entraînement.
+- **`report.html`** (autonome, sans JavaScript) contient :
+  - indicateurs clés, recommandations ;
+  - top et flop des clips ;
+  - hooks gagnants aux tests A/B, styles de hook ;
+  - meilleurs créneaux et plateformes ;
+  - campagnes les plus rentables (gains estimés = vues × CPM) ;
+  - importance de chaque signal dans le modèle.
 
 ### Raccourci
 
@@ -449,7 +470,7 @@ pytest
 5. ✅ `modules/render.py` + mise à jour du notebook
 6. ✅ `prepare` / `sync`
 7. ✅ Notebook Kaggle
-8. ✅ `discover` · 9. ✅ `publish` · 10. ✅ `monetize` · 11. `learn`
+8. ✅ `discover` · 9. ✅ `publish` · 10. ✅ `monetize` · 11. ✅ `learn`
 12. `watch`
 
 ## Usage responsable

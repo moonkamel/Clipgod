@@ -277,6 +277,7 @@ publish:
   upload_post:
     endpoint: "https://api.upload-post.com/api/upload"   # à vérifier dans la doc Upload-Post
     user_env: UPLOAD_POST_USER      # nom du profil Upload-Post (variable d'environnement)
+    analytics_endpoint: null        # ex. "https://api.upload-post.com/api/analytics/{request_id}" (à vérifier)
   env:
     upload_post_api_key: UPLOAD_POST_API_KEY
     youtube_client_secrets: YOUTUBE_CLIENT_SECRETS
@@ -311,14 +312,16 @@ learn:
   checkpoints_hours: [1, 6, 24, 72]
   retrain_every_n_clips: 20
   retrain_every_days: 7
-  target: views_24h
+  target: views_24h                 # vues à 24 h : bon compromis vitesse de retour / fiabilité
+  min_samples_to_train: 10
+  manual_views_file: data/manual_views.csv   # TikTok/Instagram sans API : post_id (ou url), views, measured_at
   model:
     type: GradientBoostingRegressor
     n_estimators: 300
     learning_rate: 0.05
     max_depth: 3
+    subsample: 0.9
     random_state: 42
-  min_samples_to_train: 10
 
 # ---------------------------------------------------------------------
 # Logs / robustesse

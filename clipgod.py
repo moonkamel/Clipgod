@@ -447,9 +447,31 @@ def learn(
     collect: bool = typer.Option(True, "--collect/--no-collect", help="Collecte les vues 1h/6h/24h/72h."),
     retrain: bool = typer.Option(False, "--retrain", help="Force le réentraînement du modèle."),
     report: bool = typer.Option(True, "--report/--no-report", help="Génère report.html."),
+    push: bool = typer.Option(True, "--push/--no-push", help="Envoie le nouveau model.pkl sur Drive."),
 ) -> None:
     """Suit les performances, réentraîne data/model.pkl et génère report.html."""
-    raise NotImplementedError("learn : à implémenter (étape 11).")
+    from modules.learn import learn as run_learn
+
+    cfg = ctx.obj["config"]
+    res = run_learn(cfg, collect_views=collect and not ctx.obj.get("dry_run"), retrain=retrain, report=report,
+                    push=push and not ctx.obj.get("dry_run"))
+    if res.collected is not None:
+        detail = ", ".join(f"{k}: {v}" for k, v in res.collected.by_platform.items()) or "aucune"
+        console.print(f"📈 {res.collected.observed} mesure(s) de vues ({detail})")
+        if res.collected.missing:
+            console.print(f"[dim]  {len(res.collected.missing)} post(s) sans source de vues (TikTok/Instagram : "
+                          "data/manual_views.csv ou publish.upload_post.analytics_endpoint)[/]")
+    console.print(f"🗂️  data/historical_scores.csv : {res.rows} post(s), {res.measured} mesuré(s) à la cible")
+    if res.trained and res.model_meta:
+        cv = res.model_meta.get("cv_r2")
+        console.print(f"[green]🧠 model.pkl réentraîné[/] ({res.train_reason}) sur {res.model_meta['n_samples']} clips"
+                      + (f", R² CV = {cv:.2f}" if cv is not None else ""))
+        if res.pushed:
+            console.print("   envoyé sur Drive : le prochain scan l'utilisera automatiquement")
+    else:
+        console.print(f"[dim]🧠 pas de réentraînement : {res.train_reason}[/]")
+    if res.report_path:
+        console.print(f"📄 Rapport : {res.report_path}")
 
 
 # ---------------------------------------------------------------------------
