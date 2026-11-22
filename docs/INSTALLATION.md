@@ -1,0 +1,439 @@
+# Guide d'installation de ClipGod
+
+Ce guide part de zéro : un laptop (Windows, macOS ou Linux), un compte Google et une connexion Internet.
+Comptez **environ 1 h** la première fois, dont la moitié pour créer les clés d'API.
+
+> Tout est gratuit. Seul Upload-Post (publication TikTok / Instagram) est optionnel et peut être payant au-delà
+> de son offre gratuite.
+
+## Sommaire
+
+1. [Ce qu'il vous faut](#1-ce-quil-vous-faut)
+2. [Installer les outils du laptop](#2-installer-les-outils-du-laptop)
+3. [Récupérer ClipGod](#3-récupérer-clipgod)
+4. [Installer ClipGod](#4-installer-clipgod)
+5. [Créer les clés Google (Drive + YouTube)](#5-créer-les-clés-google-drive--youtube)
+6. [Créer les clés Twitch](#6-créer-les-clés-twitch)
+7. [Remplir le fichier `.env`](#7-remplir-le-fichier-env)
+8. [Connecter Google Drive](#8-connecter-google-drive)
+9. [Préparer le notebook GPU (Colab)](#9-préparer-le-notebook-gpu-colab)
+10. [Option : Kaggle](#10-option--kaggle)
+11. [Option : TikTok et Instagram (Upload-Post)](#11-option--tiktok-et-instagram-upload-post)
+12. [Cibler vos chaînes et campagnes](#12-cibler-vos-chaînes-et-campagnes)
+13. [Premier essai de bout en bout](#13-premier-essai-de-bout-en-bout)
+14. [Automatiser `learn`](#14-automatiser-learn)
+15. [Dépannage](#15-dépannage)
+
+---
+
+## 1. Ce qu'il vous faut
+
+| Élément | Pourquoi | Obligatoire |
+|---|---|---|
+| Un compte **Google** | Google Drive (lien laptop ↔ GPU), Colab, YouTube | Oui |
+| Un compte **Twitch** | Clés de l'API Twitch pour `discover` | Recommandé |
+| Une chaîne **YouTube** | Publication des Shorts | Pour `publish` |
+| Un compte **GitHub** | Seulement si le dépôt ClipGod est privé | Selon le dépôt |
+| Un compte **Kaggle** vérifié par téléphone | GPU de secours (30 h/semaine) | Non |
+| Un compte **Upload-Post** | Publier sur TikTok / Instagram | Non |
+
+Le laptop n'a **pas besoin de GPU** : il ne fait qu'orchestrer. La transcription et le montage tournent
+sur le GPU gratuit de Google Colab.
+
+Espace disque sur le laptop : ~1 Go pour ClipGod et ses dépendances, plus la place des clips (~5 Mo par clip).
+
+---
+
+## 2. Installer les outils du laptop
+
+Il faut **Python 3.10 ou plus récent**, **Git** et **ffmpeg**.
+
+### Windows
+
+Ouvrez **PowerShell** (menu Démarrer › « PowerShell ») et lancez :
+
+```powershell
+winget install -e --id Python.Python.3.12
+winget install -e --id Git.Git
+winget install -e --id Gyan.FFmpeg
+```
+
+Fermez puis rouvrez PowerShell pour que les nouvelles commandes soient trouvées.
+
+> Sans `winget` : installez Python depuis [python.org](https://www.python.org/downloads/) en cochant
+> **« Add python.exe to PATH »** sur le premier écran, Git depuis [git-scm.com](https://git-scm.com/download/win),
+> et ffmpeg depuis [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (ajoutez son dossier `bin` au PATH).
+
+### macOS
+
+Avec [Homebrew](https://brew.sh) :
+
+```bash
+brew install python@3.12 git ffmpeg
+```
+
+### Linux (Debian / Ubuntu)
+
+```bash
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip git ffmpeg
+```
+
+### Vérification
+
+```bash
+python --version      # Windows (ou python3 --version sur macOS / Linux) : 3.10 ou plus
+git --version
+ffmpeg -version
+```
+
+> ffmpeg sert au laptop pour télécharger les VODs YouTube (assemblage vidéo + audio) et, plus tard, pour `watch`.
+> Sans lui, utilisez `--download cloud` : c'est alors le notebook qui télécharge.
+
+---
+
+## 3. Récupérer ClipGod
+
+Placez-vous dans le dossier où vous voulez installer ClipGod (par exemple vos Documents), puis :
+
+```bash
+git clone https://github.com/moonkamel/clipgod.git
+cd clipgod
+```
+
+**Tant que le code n'est pas fusionné dans `main`**, prenez la branche de développement :
+
+```bash
+git checkout ccr-80e6fd10-jyuvxf
+```
+
+Le dépôt est privé ? Git vous demandera un identifiant et un mot de passe : utilisez votre nom d'utilisateur GitHub
+et un **jeton d'accès** (GitHub › Settings › Developer settings › Personal access tokens › *Fine-grained*,
+accès en lecture au contenu du dépôt), pas votre mot de passe.
+
+---
+
+## 4. Installer ClipGod
+
+Créez un environnement Python isolé, puis installez ClipGod dedans.
+
+**Windows (PowerShell)**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+> Si PowerShell refuse d'activer l'environnement (« l'exécution de scripts est désactivée ») :
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, puis relancez la commande d'activation.
+
+**macOS / Linux**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+Vérifiez :
+
+```bash
+clipgod --help
+pytest -q
+```
+
+`clipgod --help` liste les commandes, et `pytest` doit afficher uniquement des points (tous les tests passent).
+
+> **À chaque nouvelle session de terminal**, réactivez l'environnement (`.venv\Scripts\Activate.ps1` ou
+> `source .venv/bin/activate`) avant d'utiliser `clipgod`.
+>
+> N'installez **pas** l'extra `[cloud]` sur le laptop : il contient faster-whisper et OpenCV, réservés au notebook GPU.
+
+---
+
+## 5. Créer les clés Google (Drive + YouTube)
+
+Tout se fait dans la [Google Cloud Console](https://console.cloud.google.com/), avec le compte Google qui
+possède votre Drive et votre chaîne YouTube.
+
+### 5.1 Créer un projet
+
+En haut de la page : sélecteur de projet › **Nouveau projet** › nom `clipgod` › **Créer**, puis sélectionnez-le.
+
+### 5.2 Activer les API
+
+Menu › **API et services** › **Bibliothèque**, puis activez :
+
+- **Google Drive API**
+- **YouTube Data API v3**
+
+### 5.3 Écran de consentement OAuth
+
+Menu › **API et services** › **Écran de consentement OAuth** (ou « Google Auth Platform ») :
+
+1. Type d'utilisateur : **Externe**.
+2. Nom de l'application : `ClipGod` ; adresse d'assistance et adresse du développeur : la vôtre.
+3. **Utilisateurs test** : ajoutez **votre adresse Gmail**. Sans cette étape, Google affichera « Accès bloqué ».
+
+> En mode « Test », Google fait expirer l'autorisation au bout de **7 jours** : il faudra alors vous reconnecter
+> (voir [Dépannage](#15-dépannage)). Pour l'éviter, passez l'application en **« En production »** sur ce même
+> écran. Pour un usage personnel, aucune validation n'est nécessaire : Google affiche seulement un avertissement
+> « application non validée » que vous pouvez passer (*Paramètres avancés › Accéder à ClipGod*).
+
+### 5.4 Identifiant OAuth (Drive et upload YouTube)
+
+Menu › **API et services** › **Identifiants** › **Créer des identifiants** › **ID client OAuth** :
+
+- Type d'application : **Application de bureau** ; nom : `ClipGod laptop` › **Créer**.
+- Cliquez **Télécharger le JSON**.
+- Dans le dossier `clipgod`, créez un dossier `secrets` et enregistrez-y ce fichier sous le nom
+  **`client_secrets.json`**.
+
+Le dossier `secrets/` est ignoré par Git : vos clés ne partiront jamais sur GitHub.
+
+### 5.5 Clé d'API YouTube (recherche de vidéos)
+
+Toujours dans **Identifiants** › **Créer des identifiants** › **Clé API**. Copiez-la, puis cliquez
+**Modifier la clé** › *Restrictions relatives aux API* › **YouTube Data API v3** uniquement › Enregistrer.
+
+---
+
+## 6. Créer les clés Twitch
+
+1. Connectez-vous sur la [console développeur Twitch](https://dev.twitch.tv/console) (activez la double
+   authentification sur votre compte Twitch si on vous le demande).
+2. **Applications** › **Enregistrer votre application** :
+   - Nom : `clipgod-<votre pseudo>` (le nom doit être unique sur Twitch) ;
+   - URL de redirection OAuth : `http://localhost` ;
+   - Catégorie : *Application Integration* ;
+   - Type de client : **Confidentiel**.
+3. Ouvrez l'application créée : copiez l'**ID client**, puis **Nouveau secret** et copiez le secret
+   (il n'est affiché qu'une fois).
+
+---
+
+## 7. Remplir le fichier `.env`
+
+Copiez le modèle :
+
+```bash
+cp .env.example .env          # Windows : copy .env.example .env
+```
+
+Ouvrez `.env` avec un éditeur de texte (Bloc-notes, VS Code…) et remplissez :
+
+```ini
+YOUTUBE_API_KEY=AIza...                 # étape 5.5
+TWITCH_CLIENT_ID=abc123...              # étape 6
+TWITCH_CLIENT_SECRET=xyz789...          # étape 6
+CLIPGOD_GDRIVE_CLIENT_SECRETS=./secrets/client_secrets.json
+CLIPGOD_GDRIVE_TOKEN=./secrets/drive_token.json
+YOUTUBE_CLIENT_SECRETS=./secrets/client_secrets.json
+```
+
+Le même `client_secrets.json` sert à Drive et à YouTube. Les fichiers `*_token.json` seront créés
+automatiquement à la première connexion.
+
+> Ne partagez jamais `.env` ni le dossier `secrets/`. Ils sont exclus de Git par `.gitignore`.
+
+---
+
+## 8. Connecter Google Drive
+
+Le laptop et le notebook GPU s'échangent les fichiers via le dossier **`ClipGod/`** de votre Google Drive.
+Deux façons de le relier au laptop.
+
+### Option A : Google Drive pour ordinateur (le plus simple)
+
+Si l'application [Google Drive pour ordinateur](https://www.google.com/drive/download/) est installée et
+synchronise votre Drive, ouvrez `config.yaml` et indiquez le dossier :
+
+```yaml
+drive:
+  local_root: "G:/Mon Drive/ClipGod"     # Windows (vérifiez la lettre de lecteur)
+  # macOS : "~/Library/CloudStorage/GoogleDrive-<votre adresse>/My Drive/ClipGod"
+```
+
+Pas d'autorisation à donner : ClipGod lit et écrit directement dans ce dossier.
+
+### Option B : API Drive (sans application à installer)
+
+Laissez `local_root: null` et lancez :
+
+```bash
+clipgod sync --status
+```
+
+Un navigateur s'ouvre : choisissez votre compte Google, acceptez l'accès à Drive. Le terminal affiche ensuite
+« Aucun job sur Drive » : la connexion fonctionne, et le token est enregistré dans `secrets/drive_token.json`.
+
+Dans les deux cas, ClipGod crée le dossier `ClipGod/` (avec `jobs/`, `sources/`, `moments/`, `clips/`,
+`jobs_done/`) à la première utilisation.
+
+---
+
+## 9. Préparer le notebook GPU (Colab)
+
+1. Ouvrez [Google Colab](https://colab.research.google.com) avec **le même compte Google**.
+2. **Fichier › Ouvrir un notebook › GitHub** : collez `moonkamel/clipgod`, choisissez la branche
+   (`ccr-80e6fd10-jyuvxf` tant que le code n'est pas dans `main`) et ouvrez `notebooks/clipgod_colab.ipynb`.
+   Une fois le code fusionné dans `main`, le badge *Open in Colab* du README suffit.
+3. **Exécution › Modifier le type d'exécution** › Accélérateur matériel : **GPU T4** › Enregistrer.
+4. Dans la cellule **⚙️ Paramètres**, mettez `BRANCH` sur la même branche que ci-dessus.
+5. **Dépôt privé** : icône 🔑 (Secrets) à gauche › ajoutez `GITHUB_TOKEN` avec un jeton GitHub en lecture
+   seule, et activez « Accès au notebook ».
+
+Pas besoin de lancer le notebook maintenant : vous le ferez à l'étape 13, quand un job l'attendra.
+
+---
+
+## 10. Option : Kaggle
+
+Utile quand votre quota Colab est épuisé.
+
+1. Sur [kaggle.com](https://www.kaggle.com), vérifiez votre compte par téléphone (*Settings › Phone verification*).
+2. **Create › New Notebook** › *File › Import Notebook* › importez `notebooks/clipgod_kaggle.ipynb`.
+3. Panneau de droite : *Session options* › Accelerator **GPU T4 x2**, Internet **On**.
+4. *Add-ons › Secrets* :
+   - `CLIPGOD_GDRIVE_TOKEN_JSON` : collez **tout le contenu** du fichier `secrets/drive_token.json` du laptop.
+     Il n'existe qu'après l'option B de l'étape 8 (lancez `clipgod sync --status` une fois même si vous utilisez
+     l'option A) ;
+   - `GITHUB_TOKEN` si le dépôt est privé.
+5. Dans la cellule de paramètres, ajustez `BRANCH`.
+
+---
+
+## 11. Option : TikTok et Instagram (Upload-Post)
+
+Sans cette étape, `publish` utilise uniquement YouTube Shorts.
+
+1. Créez un compte sur [upload-post.com](https://upload-post.com), connectez-y vos comptes TikTok / Instagram,
+   et notez le nom du **profil** créé.
+2. Récupérez votre clé d'API dans leur tableau de bord.
+3. Dans `.env` :
+
+   ```ini
+   UPLOAD_POST_API_KEY=...
+   UPLOAD_POST_USER=nom_du_profil
+   ```
+
+4. Comparez l'URL et les champs d'envoi avec leur documentation, et ajustez si besoin `publish.upload_post`
+   dans `config.yaml`.
+
+---
+
+## 12. Cibler vos chaînes et campagnes
+
+- **`data/campaigns.txt`** : les chaînes à surveiller en priorité et les campagnes Whop suivies, une par ligne :
+
+  ```
+  twitch:nom_de_la_chaine  nom-de-campagne
+  youtube:@handle
+  kick:slug
+  whop:slug-de-la-campagne
+  ```
+
+- **`data/whop_campaigns.yaml`** : collez-y les campagnes Whop qui vous intéressent (CPM, budget, règles,
+  hashtags obligatoires). Le fichier contient un exemple commenté. Ces informations priment sur le scraping
+  automatique, qui peut rater des campagnes si Whop change son site.
+
+Vérifiez avec :
+
+```bash
+clipgod monetize --refresh
+```
+
+---
+
+## 13. Premier essai de bout en bout
+
+Chaque étape doit réussir avant la suivante.
+
+```bash
+# 1. Trouver des sources (YouTube + Twitch)
+clipgod discover
+
+# 2. Envoyer une VOD au notebook (prenez une URL affichée par discover, ou --source chemin/vers/video.mp4)
+clipgod prepare --source https://www.twitch.tv/videos/XXXXXXXXX
+```
+
+3. Dans Colab : **Exécution › Tout exécuter**. Autorisez l'accès à Drive quand on vous le demande.
+   Comptez ~10 à 20 min pour une VOD de 2 h (la première fois, le modèle whisper est téléchargé).
+   La cellule 8️⃣ montre les moments détectés et le premier clip.
+
+```bash
+# 4. Récupérer les clips sur le laptop
+clipgod sync
+
+# 5. Voir le plan de publication, puis publier en mode test (YouTube, en privé)
+clipgod publish --plan
+clipgod publish
+
+# 6. Plus tard (1 h, 6 h, 24 h après) : mesurer les vues et générer le rapport
+clipgod learn
+```
+
+Au premier `publish`, un navigateur s'ouvre pour autoriser l'envoi sur votre chaîne YouTube.
+Les vidéos apparaissent en **privé** dans YouTube Studio.
+
+Pour publier réellement : `clipgod publish --live`. Tant que votre projet Google Cloud n'a pas passé l'audit
+de l'API YouTube, Google garde ces vidéos en privé (voir [Dépannage](#15-dépannage)).
+
+Raccourci pour les étapes 1-2 : `clipgod run` (meilleure VOD trouvée) ou `clipgod run --source <url>`.
+
+---
+
+## 14. Automatiser `learn`
+
+`learn` doit tourner régulièrement pour mesurer les vues à 1 h, 6 h, 24 h et 72 h. Une exécution toutes les
+heures suffit.
+
+**Windows (Planificateur de tâches)** : créez un fichier `learn.bat` dans le dossier `clipgod` :
+
+```bat
+@echo off
+cd /d %~dp0
+call .venv\Scripts\activate.bat
+clipgod learn >> logs\learn_task.log 2>&1
+```
+
+puis : Planificateur de tâches › *Créer une tâche de base* › Déclencheur **Quotidien**, répéter **toutes les
+1 heure** › Action : démarrer `learn.bat`.
+
+**macOS / Linux (cron)** : `crontab -e` puis ajoutez :
+
+```cron
+7 * * * * cd /chemin/vers/clipgod && .venv/bin/clipgod learn >> logs/learn_task.log 2>&1
+```
+
+---
+
+## 15. Dépannage
+
+| Symptôme | Cause probable | Solution |
+|---|---|---|
+| `python` ou `clipgod` introuvable | PATH ou environnement non activé | Rouvrez le terminal, réactivez `.venv` (étape 4). |
+| `config.yaml introuvable` | Commande lancée hors du dossier `clipgod` | `cd` dans le dossier, ou `clipgod --config chemin/config.yaml …`. |
+| « Accès bloqué : ClipGod n'a pas terminé la procédure de validation » | Adresse absente des utilisateurs test | Étape 5.3 : ajoutez votre Gmail aux utilisateurs test. |
+| Drive ou YouTube redemande l'autorisation chaque semaine, ou `invalid_grant` | Application OAuth en mode « Test » (jetons valables 7 jours) | Supprimez `secrets/drive_token.json` (ou `youtube_token.json`) et relancez ; pour de bon, passez l'application en production (étape 5.3). |
+| `API Drive … HTTP 403` | API Drive non activée, ou mauvais compte | Étape 5.2 ; vérifiez que Colab et le laptop utilisent le même compte. |
+| `Variable d'environnement … manquante` | `.env` incomplet | Étape 7 ; le nom de la variable est donné dans le message. |
+| `discover` : « Aucune plateforme exploitable » | Clés YouTube/Twitch absentes ou invalides | Étapes 5.5 et 6 ; `clipgod discover -p twitch` pour tester une plateforme seule. |
+| Kick ignoré avec un avertissement | Endpoints non officiels bloqués par Cloudflare | Normal de temps en temps ; YouTube et Twitch continuent. |
+| `ffmpeg est requis` pendant `prepare` | ffmpeg absent du laptop | Étape 2, ou `clipgod prepare --download cloud …`. |
+| Colab : « Aucun GPU » | Type d'exécution sans GPU, ou quota GPU épuisé | Étape 9.3 ; si le quota est épuisé, réessayez plus tard ou utilisez Kaggle. |
+| Colab : `Unable to load libcudnn_ops.so.9` | Bibliothèques CUDA non trouvées | Exécution › Redémarrer la session, puis Tout exécuter. ClipGod précharge ces bibliothèques automatiquement. |
+| Le job échoue avec « Sign in to confirm you're not a bot » | YouTube bloque le téléchargement depuis Colab | `clipgod prepare --download local --force --source <url>` : le laptop télécharge la VOD. |
+| `clipgod sync` : job `failed` | Erreur côté notebook (affichée) | Lisez l'erreur ; un job est retenté automatiquement une fois avant d'être marqué `failed`. |
+| Vidéos YouTube toujours privées en `--live` | Projet Google Cloud non audité | Demandez l'audit de l'API YouTube (formulaire gratuit de Google), ou publiez via Upload-Post. |
+| `Quota YouTube insuffisant` | 10 000 unités/jour atteintes | Remise à zéro à minuit, heure du Pacifique (9 h à Paris). `publish` continue sur les autres plateformes. |
+| `monetize` ne trouve aucune campagne | Le site Whop a changé | Ajoutez vos campagnes dans `data/whop_campaigns.yaml` (étape 12). |
+| `learn` : « pas de réentraînement » | Moins de 10 clips mesurés à 24 h | Normal au début : publiez, attendez 24 h, relancez `learn`. |
+
+Les journaux détaillés sont dans **`logs/clipgod.log`** (une ligne JSON par événement). Ajoutez `-v` à
+n'importe quelle commande pour plus de détails : `clipgod -v sync`.
+
+> `clipgod watch` (surveillance des lives) n'est pas encore disponible : c'est la dernière étape de la feuille
+> de route. Le reste du pipeline fonctionne sans lui.

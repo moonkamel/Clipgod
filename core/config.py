@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,8 @@ def load_dotenv_file(path: Path) -> None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()   # commentaire de fin de ligne
         if key and key not in os.environ:
             os.environ[key] = value
 

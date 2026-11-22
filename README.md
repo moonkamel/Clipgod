@@ -75,6 +75,8 @@ clipgod/
 
 ## Installation (laptop)
 
+> 📘 **Guide pas à pas, du laptop vierge au premier clip publié : [docs/INSTALLATION.md](docs/INSTALLATION.md)**
+
 Python ≥ 3.10. Seules les dépendances **légères** sont installées localement.
 
 ```bash

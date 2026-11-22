@@ -57,3 +57,24 @@ def test_job_config_subset(project):
     cfg = C.load_config(project / "config.yaml")
     sub = C.job_config(cfg)
     assert set(sub) >= {"scan", "render"} and "publish" not in sub and "_meta" not in sub
+
+
+def test_dotenv_fallback_strips_inline_comments(tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_dotenv(name, *a, **k):
+        if name == "dotenv":
+            raise ImportError
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_dotenv)
+    for k in ("CG_A", "CG_B"):
+        monkeypatch.delenv(k, raising=False)
+    env = tmp_path / ".env"
+    env.write_text('CG_A=value   # commentaire\nCG_B="keep # this"\n')
+    C.load_dotenv_file(env)
+    import os
+
+    assert os.environ["CG_A"] == "value" and os.environ["CG_B"] == "keep # this"
