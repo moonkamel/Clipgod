@@ -132,11 +132,38 @@ nommé `CLIPGOD_GDRIVE_TOKEN_JSON`.
 ### 1. Trouver des sources — laptop
 
 ```bash
-clipgod discover                       # → data/sources.json (url, title, viewers, duration, streamer, platform)
+clipgod discover                       # → data/sources.json + tableau des meilleures sources
 clipgod discover -p twitch -n 10       # une plateforme, 10 résultats
+clipgod discover --no-cache            # ignore le cache de 5 min
+clipgod run                            # discover + prepare de la meilleure VOD, en une commande
 ```
 
-Les cibles prioritaires se déclarent dans `data/campaigns.txt` (`twitch:<login>`, `youtube:@handle`, `kick:<slug>`).
+| Plateforme | Accès (gratuit) | Ce qui est examiné |
+|---|---|---|
+| YouTube | Data API v3 (`YOUTUBE_API_KEY`) | 1 recherche de lives et 1 de VODs longues des dernières 24 h (100 unités chacune), plus les dernières vidéos des chaînes de `campaigns.txt` (1 unité). |
+| Twitch | Helix (`TWITCH_CLIENT_ID` / `SECRET`) | Lives de la catégorie *Grand Theft Auto VI*, top VODs du jour de la catégorie, chaînes de `campaigns.txt`. |
+| Kick | Lecture légère des endpoints JSON publics | Lives et VODs des chaînes de `campaigns.txt` / `discover.kick.channels`. Ces endpoints ne sont pas officiels : si Kick les change ou les bloque, la plateforme est ignorée avec un avertissement. |
+
+**Filtres** :
+- live en cours depuis au moins 45 min, ou VOD de moins de 24 h et de plus de 45 min ;
+- titre ou catégorie GTA 6 (« GTA V » est exclu) ;
+- `min_viewers`, sauf pour les chaînes de campagne.
+
+**Classement** : les chaînes de `data/campaigns.txt` d'abord, puis le ratio **vues/heure** (VOD : vues ÷ heures
+depuis la publication ; live : spectateurs simultanés). Une plateforme sans clé ou en panne est ignorée sans
+bloquer les autres.
+
+**Quota YouTube** : il est partagé avec `publish` et suivi dans `data/state.json`, avec une remise à zéro à minuit
+heure du Pacifique. `discover` est plafonné à `discover.youtube.daily_budget` (1 500 unités par jour) pour laisser
+de la place aux uploads (1 600 unités chacun).
+
+`data/campaigns.txt` :
+
+```
+twitch:kaicenat gta6-launch     # plateforme:identifiant [nom de campagne]
+youtube:@caseoh
+kick:xqc
+```
 
 ### 2. Préparer un job — laptop
 
@@ -374,7 +401,7 @@ pytest
 5. ✅ `modules/render.py` + mise à jour du notebook
 6. ✅ `prepare` / `sync`
 7. ✅ Notebook Kaggle
-8. `discover` · 9. `publish` · 10. `monetize` · 11. `learn`
+8. ✅ `discover` · 9. `publish` · 10. `monetize` · 11. `learn`
 12. `watch`
 
 ## Usage responsable

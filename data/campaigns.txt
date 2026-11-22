@@ -1,6 +1,7 @@
-# Une campagne / chaîne cible par ligne. Formats acceptés :
-#   twitch:<login>
-#   youtube:<channel_id ou @handle>
-#   kick:<slug>
-#   whop:<campaign_slug>
+# Chaînes / campagnes ciblées par discover (prioritaires dans le classement).
+# Format : plateforme:identifiant [nom_campagne]
+#   twitch:<login>           ex. twitch:kaicenat gta6-launch
+#   youtube:<@handle|UC...>  ex. youtube:@caseoh
+#   kick:<slug>              ex. kick:xqc
+#   whop:<slug_campagne>     (utilisé par monetize)
 # Les lignes commençant par # sont ignorées.

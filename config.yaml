@@ -61,14 +61,23 @@ drive:
 # ---------------------------------------------------------------------
 discover:
   platforms: [youtube, twitch, kick]
-  cache_ttl_seconds: 300            # cache local 5 min
+  cache_ttl_seconds: 300            # cache local 5 min par plateforme
   max_vod_age_hours: 24
-  min_duration_minutes: 45
+  min_duration_minutes: 45          # VOD > 45 min ; live en cours depuis > 45 min
   max_results_per_platform: 25
-  min_viewers: 500
-  keywords: ["GTA 6", "GTA VI", "Grand Theft Auto VI", "GTA6"]
+  min_viewers: 500                  # ignoré pour les chaînes de campaigns.txt
+  keywords: ["GTA 6", "GTA VI", "GTA6", "Grand Theft Auto VI", "Grand Theft Auto 6"]
   twitch_game_name: "Grand Theft Auto VI"
-  rank_by: viewers_per_hour          # ratio viewers / heure de stream
+  rank_by: views_per_hour           # campagnes d'abord, puis vues/heure
+  youtube:
+    search_live: true               # 1 search.list = 100 unités
+    search_vods: true               # 1 search.list = 100 unités
+    max_units_per_run: 300
+    daily_budget: 1500              # part du quota (10 000/j) réservée à discover ; le reste va aux uploads
+  kick:
+    channels: []                    # slugs suivis en plus de campaigns.txt (kick:<slug>)
+    videos_per_channel: 5
+    delay_seconds: 0.5              # lecture légère : pause entre deux chaînes
   env:
     youtube_api_key: YOUTUBE_API_KEY
     twitch_client_id: TWITCH_CLIENT_ID

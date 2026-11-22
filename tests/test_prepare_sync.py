@@ -188,5 +188,5 @@ def test_cli_prepare_and_sync_status(env, monkeypatch):
     res = runner.invoke(clipgod.app, ["--config", str(tmp / "config.yaml"), "sync", "--status"])
     assert res.exit_code == 0 and "queued" in res.output
     res = runner.invoke(clipgod.app, ["--config", str(tmp / "config.yaml"), "run"])
-    assert isinstance(res.exception, NotImplementedError) and "étape 8" in str(res.exception)
+    assert res.exit_code == 1 and "discover" in res.output              # aucune clé API -> aucune VOD
     assert json.loads((tmp / "data" / "state.json").read_text())["jobs"]

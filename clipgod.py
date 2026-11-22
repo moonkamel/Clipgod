@@ -67,12 +67,38 @@ def discover(
     platform: list[str] = typer.Option(
         None, "--platform", "-p", help="youtube | twitch | kick (répétable). Défaut : config."
     ),
-    limit: int = typer.Option(25, "--limit", "-n", help="Nombre max de sources par plateforme."),
+    limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Nombre max de sources par plateforme."),
     no_cache: bool = typer.Option(False, "--no-cache", help="Ignore le cache local de 5 min."),
-    output: Path = typer.Option(Path("data/sources.json"), "--output", "-o"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Défaut : data/sources.json."),
+    show: int = typer.Option(15, "--show", help="Nombre de lignes affichées."),
 ) -> None:
     """Trouve les streams live / VODs < 24h (> 45 min) GTA 6 -> data/sources.json."""
-    raise NotImplementedError("discover : à implémenter (étape 8).")
+    from rich.table import Table
+
+    from core.quota import YouTubeQuota
+    from modules.discover import DiscoverError
+    from modules.discover import discover as run_discover
+
+    cfg = ctx.obj["config"]
+    try:
+        sources = run_discover(cfg, platforms=platform or None, limit=limit, use_cache=not no_cache, output=output)
+    except DiscoverError as exc:
+        console.print(f"[red]discover :[/] {exc}")
+        raise typer.Exit(1) from None
+    table = Table(title=f"Sources GTA 6 ({len(sources)})")
+    for col in ("#", "plateforme", "statut", "streamer", "titre", "viewers", "durée", "vues/h", "campagne"):
+        table.add_column(col, overflow="fold")
+    for i, s in enumerate(sources[:show], 1):
+        h, m = divmod(int(s["duration"]) // 60, 60)
+        table.add_row(str(i), s["platform"], "🔴 live" if s["status"] == "live" else "vod", s["streamer"],
+                      s["title"][:60], f"{s['viewers']:,}".replace(",", " "), f"{h}h{m:02d}",
+                      f"{s['views_per_hour']:,.0f}".replace(",", " "), s.get("campaign") or "")
+    console.print(table)
+    console.print(f"[dim]Quota YouTube restant aujourd'hui : {YouTubeQuota.from_config(cfg).remaining()} u[/]")
+    if sources:
+        best = next((s for s in sources if s["status"] == "vod"), None)
+        if best:
+            console.print(f"→ Clipper la meilleure VOD : [bold]clipgod run --source {best['url']}[/]")
 
 
 # ---------------------------------------------------------------------------
@@ -364,10 +390,14 @@ def run(
 ) -> None:
     """Enchaîne discover -> prepare puis indique d'ouvrir le notebook Colab et de lancer `clipgod sync`."""
     if source is None:
-        from modules.discover import best_source  # étape 8
+        from modules.discover import DiscoverError, best_source
 
-        source = best_source(ctx.obj["config"])
-        console.print(f"Meilleure source trouvée par discover : {source}")
+        try:
+            source = best_source(ctx.obj["config"])
+        except DiscoverError as exc:
+            console.print(f"[red]discover :[/] {exc}")
+            raise typer.Exit(1) from None
+        console.print(f"Meilleure VOD trouvée par discover : [bold]{source}[/]")
     job = _prepare_job(ctx, source, job_id=None, streamer=streamer, campaign=campaign, voiceover=False,
                        download=download, force=not resume)
     _print_next_steps(ctx.obj["config"], job)
