@@ -285,13 +285,34 @@ Un job en échec est affiché avec son erreur. La commande est idempotente : rel
 ### 5. Valider et publier — laptop
 
 ```bash
-clipgod monetize             # classement des campagnes par $/heure estimé
-clipgod publish              # valide chaque clip (règles campagne) puis programme, mode test par défaut
-clipgod publish --live       # publication réelle
+clipgod publish --plan          # montre le plan (validation, plateformes, créneaux) sans rien envoyer
+clipgod publish                 # mode test (défaut) : upload YouTube en PRIVÉ, rien de public
+clipgod publish --live          # programme sur les créneaux de forte audience (max 6/jour)
+clipgod publish --live --now    # publie immédiatement (toujours plafonné à 6/jour)
 ```
 
-Un clip refusé (durée > 30 s, pas de hook dans la 1ʳᵉ seconde, simple re-upload…) est consigné dans
-`data/rejected.json` avec la raison.
+1. **Validation** (module `monetize`) :
+   - durée < 30 s, hook dans la 1ʳᵉ seconde, format vertical ;
+   - vraie transformation : recadrage, plus au moins 2 éléments parmi sous-titres, hook, facecam et voix off.
+
+   Un clip refusé va dans `data/rejected.json` avec ses raisons.
+2. **A/B test** : les variantes de hook d'un même moment partent sur des **créneaux différents** et tournent entre
+   les plateformes. Les meilleurs moments passent en premier, et deux variantes d'un même moment ne se suivent jamais.
+3. **Créneaux** : `publish.slots`, en heure de Paris : matin EU (08:30, 11:00) et soirée US (00:30 à 03:30, soit 18h30-21h30 EST).
+4. **Plateformes** (`publish.routes`) :
+
+| Plateforme | Backend | Prérequis |
+|---|---|---|
+| YouTube Shorts | API YouTube officielle (gratuite), programmation native `publishAt` | `YOUTUBE_CLIENT_SECRETS` : ID client OAuth « Application de bureau », API YouTube Data v3 activée. Navigateur ouvert au 1er lancement. |
+| TikTok, Instagram Reels | [Upload-Post](https://upload-post.com) (optionnel) | `UPLOAD_POST_API_KEY` et `UPLOAD_POST_USER`. Sans clé, ces plateformes sont simplement ignorées. |
+
+> ⚠️ Tant que votre projet Google Cloud n'a pas passé l'**audit de l'API YouTube**, Google force en privé toutes
+> les vidéos envoyées par l'API. Le mode test fonctionne donc immédiatement. La publication publique sur YouTube
+> demande l'audit (gratuit, formulaire Google), ou passe par Upload-Post.
+
+Le quota YouTube est vérifié avant chaque upload (1 600 unités sur 10 000 par jour, partagé avec `discover`). S'il
+est épuisé, YouTube est mis en pause pour le run et les autres plateformes continuent. Chaque post est enregistré
+dans `data/state.json` (plateforme, créneau, URL) : un clip n'est jamais publié deux fois sur la même plateforme.
 
 ### 6. Apprendre — laptop (périodique)
 
@@ -401,7 +422,7 @@ pytest
 5. ✅ `modules/render.py` + mise à jour du notebook
 6. ✅ `prepare` / `sync`
 7. ✅ Notebook Kaggle
-8. ✅ `discover` · 9. `publish` · 10. `monetize` · 11. `learn`
+8. ✅ `discover` · 9. ✅ `publish` · 10. `monetize` · 11. `learn`
 12. `watch`
 
 ## Usage responsable

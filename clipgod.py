@@ -323,14 +323,53 @@ def sync(
 @app.command()
 def publish(
     ctx: typer.Context,
-    clip: Optional[Path] = typer.Option(None, "--clip", help="Un seul clip ; défaut : tous les clips de output/."),
+    clip: Optional[Path] = typer.Option(None, "--clip", help="Un seul clip ; défaut : tous les clips synchronisés."),
     platform: list[str] = typer.Option(None, "--platform", "-p", help="youtube_shorts | tiktok | instagram_reels."),
-    test: bool = typer.Option(True, "--test/--live", help="Mode test (privé / non listé) par défaut."),
+    test: Optional[bool] = typer.Option(None, "--test/--live", help="Mode test : YouTube en privé (défaut config)."),
     schedule: bool = typer.Option(True, "--schedule/--now", help="Étale sur les créneaux de forte audience."),
     skip_validation: bool = typer.Option(False, "--skip-validation", help="DANGER : saute la validation monetize."),
+    plan: bool = typer.Option(False, "--plan", help="Affiche le plan sans rien envoyer."),
 ) -> None:
     """Valide (monetize) puis publie/programme les clips (max 6/jour, A/B test des hooks)."""
-    raise NotImplementedError("publish : à implémenter (étape 9).")
+    from rich.table import Table
+
+    from core.quota import YouTubeQuota
+    from modules.publish import PublishError
+    from modules.publish import publish as run_publish
+
+    cfg = ctx.obj["config"]
+    test_mode = bool(cfg.get("publish", {}).get("test_mode", True)) if test is None else test
+    dry = plan or bool(ctx.obj.get("dry_run"))
+    if not test_mode and not dry:
+        console.print("[bold yellow]Mode LIVE : les clips seront publiés publiquement aux créneaux prévus.[/]")
+    try:
+        report = run_publish(cfg, clip=clip, platforms=platform or None, test=test_mode, schedule=schedule,
+                             skip_validation=skip_validation, dry_run=dry)
+    except PublishError as exc:
+        console.print(f"[red]publish :[/] {exc}")
+        raise typer.Exit(1) from None
+
+    for clip_id, reasons in report.rejected:
+        console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
+    if report.posted:
+        title = "Plan de publication (rien n'a été envoyé)" if dry else ("Publié (mode test : privé)" if test_mode
+                                                                          else "Publié / programmé")
+        table = Table(title=title)
+        for col in ("clip", "plateforme", "créneau", "statut", "hook", "lien"):
+            table.add_column(col, overflow="fold")
+        for p in report.posted:
+            table.add_row(p["clip_id"], p["platform"], p["slot"] or "immédiat", p["status"], p.get("hook") or "",
+                          p.get("url") or "")
+        console.print(table)
+    for pid, why in report.skipped:
+        console.print(f"[yellow]↷ {pid}[/] : {why}")
+    for pid, err in report.errors:
+        console.print(f"[red]✖ {pid}[/] : {err}")
+    console.print(f"[dim]Quota YouTube restant aujourd'hui : {YouTubeQuota.from_config(cfg).remaining()} u[/]")
+    if not report.posted and not report.rejected:
+        console.print("[dim]Rien à publier : lancez clipgod sync pour récupérer de nouveaux clips.[/]")
+    if report.errors and not report.posted:
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

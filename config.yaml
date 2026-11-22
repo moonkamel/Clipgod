@@ -255,19 +255,27 @@ render:
 # ---------------------------------------------------------------------
 publish:
   platforms: [youtube_shorts, tiktok, instagram_reels]
-  backend: upload_post              # upload_post | youtube_api | dry_run
-  test_mode: true                   # true = privé / non listé, aucune diffusion publique
+  routes:                           # plateforme -> backend : youtube_api | upload_post | dry_run
+    youtube_shorts: youtube_api     # API officielle (gratuite)
+    tiktok: upload_post             # optionnel : nécessite UPLOAD_POST_API_KEY + UPLOAD_POST_USER
+    instagram_reels: upload_post
+  test_mode: true                   # true = YouTube en privé, rien de public (CLI : --test / --live)
+  youtube_privacy: public           # en --live --now (sans programmation)
   max_posts_per_day: 6
-  slots:                            # heures locales de forte audience
+  slots:                            # heures locales (project.timezone) de forte audience
     eu_morning: ["08:30", "11:00"]
     us_evening: ["00:30", "01:30", "02:30", "03:30"]   # 18h30-21h30 EST, exprimé en heure de Paris
   ab_testing:
-    enabled: true
-    hooks_per_clip: 3
+    enabled: true                   # variantes de hook d'un même moment sur des créneaux/plateformes différents
+  hashtags: ["#gta6", "#gtavi", "#shorts", "#gaming", "#gta"]
+  credit_template: "🎮 Credit: @{streamer}"
   youtube_quota:
     daily_units: 10000
     upload_cost: 1600
     safety_margin: 200
+  upload_post:
+    endpoint: "https://api.upload-post.com/api/upload"   # à vérifier dans la doc Upload-Post
+    user_env: UPLOAD_POST_USER      # nom du profil Upload-Post (variable d'environnement)
   env:
     upload_post_api_key: UPLOAD_POST_API_KEY
     youtube_client_secrets: YOUTUBE_CLIENT_SECRETS
