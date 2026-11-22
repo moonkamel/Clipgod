@@ -101,9 +101,45 @@ def scan(
     output_dir: Path = typer.Option(Path("output/moments"), "--output-dir", "-o"),
     whisper_model: Optional[str] = typer.Option(None, "--whisper-model", help="Override : large-v3 | medium | small."),
     device: Optional[str] = typer.Option(None, "--device", help="cuda | cpu (cpu = très lent)."),
+    transcript: Optional[Path] = typer.Option(
+        None, "--transcript", help="Transcription JSON existante (re-scan sans whisper)."
+    ),
+    source_url: Optional[str] = typer.Option(None, "--source-url", help="URL YouTube (graphe most replayed)."),
+    streamer: Optional[str] = typer.Option(None, "--streamer", help="Pseudo utilisé dans les hooks."),
 ) -> None:
     """(cloud GPU) Détecte les meilleurs moments -> moments/<video_id>.json. Normalement exécuté dans le notebook."""
-    raise NotImplementedError("scan : à implémenter (étape 3).")
+    import copy
+
+    from modules.scan import ScanError
+    from modules.scan import scan as run_scan
+
+    cfg = copy.deepcopy(ctx.obj["config"])
+    scan_cfg = cfg.setdefault("scan", {})
+    if whisper_model:
+        scan_cfg.setdefault("whisper", {})["model"] = whisper_model
+    if device:
+        scan_cfg.setdefault("whisper", {})["device"] = device
+    if transcript:
+        scan_cfg["transcript_path"] = str(transcript)
+    cfg["job"] = {"source_url": source_url, "streamer": streamer}
+    try:
+        moments = run_scan(str(video), str(output_dir), cfg)
+    except (ScanError, FileNotFoundError) as exc:
+        console.print(f"[red]Scan échoué :[/] {exc}")
+        raise typer.Exit(1) from None
+    _print_moments(moments)
+
+
+def _print_moments(moments: list[dict]) -> None:
+    from rich.table import Table
+
+    table = Table(title="Meilleurs moments", show_lines=True)
+    for col in ("#", "début", "fin", "score", "raison", "hooks"):
+        table.add_column(col)
+    for m in moments:
+        table.add_row(str(m["rank"]), f"{m['start']:.1f}s", f"{m['end']:.1f}s", f"{m['score']:.0f}",
+                      m["reason"], "\n".join(m["hooks"]))
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------

@@ -251,6 +251,35 @@ sont sauvegardées dans `inbox/raw_<timestamp>.mp4`, prêtes pour `clipgod prepa
 
 ---
 
+## Comment `scan` choisit les moments
+
+1. **Signaux par seconde** :
+   - audio : loudness librosa, pics et montées brusques ;
+   - texte : mots de hype, MAJUSCULES, répétitions (« no no no »), débit de parole, phrase coupée suivie d'une explosion sonore ;
+   - visuel : flux optique OpenCV et coupes de scène ;
+   - **most replayed** : récupéré via yt-dlp, VODs YouTube uniquement.
+2. **Fenêtres glissantes** de 15 à 45 s (pas de 5 s). Chaque signal est agrégé puis normalisé par vidéo (percentiles 5-99).
+3. **Score 0-100** :
+   - pondérations de `scan.default_weights`, ou celles de `data/model.pkl` s'il existe ;
+   - un signal absent (par ex. pas de most replayed sur Twitch) est exclu et les poids sont renormalisés ;
+   - avec `model.pkl`, le score mélange l'heuristique et la prédiction du modèle. Le poids du modèle croît avec le nombre de clips d'entraînement (`model_blend`, `model_full_trust_samples`).
+4. **Sélection** :
+   - top 3 sans chevauchement (≥ 30 s d'écart) ;
+   - bornes recalées : début sur une prise de parole, fin jamais au milieu d'un mot ;
+   - durée < 30 s centrée sur le pic ;
+   - sous `scan.min_score`, le moment reste un simple candidat.
+5. **Hooks** : 3 accroches < 60 caractères par moment, générées par des templates locaux sans LLM. Pour l'A/B test : une citation du transcript, une accroche selon le thème (police, crash, fail…) et une selon le signal dominant.
+
+`moments/<video_id>.json` contient pour chaque moment : `start`, `end`, `score`, `hooks`, `reason`, `signals`,
+`keywords`, `transcript` et `words` (timestamps mot à mot pour les sous-titres du rendu). Les étapes coûteuses sont
+checkpointées : relancer un scan, par exemple après un nouveau `model.pkl`, ne refait ni la transcription ni l'analyse vidéo.
+
+Re-scan local sans GPU, à partir d'une transcription existante :
+
+```bash
+clipgod scan video.mp4 --transcript output/moments/<video_id>.transcript.json --streamer kaicenat
+```
+
 ## Robustesse
 
 - Logs structurés dans `logs/clipgod.log` + console.
@@ -267,7 +296,7 @@ pytest
 
 1. ✅ Squelette : arborescence, `pyproject.toml`, `config.yaml`, README, CLI Typer
 2. ✅ `core/config.py`, `core/drive.py`, `core/logger.py`, `core/storage.py`
-3. `modules/scan.py` + `core/scoring.py`
+3. ✅ `modules/scan.py` + `core/scoring.py`
 4. `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh`
 5. `modules/render.py` + mise à jour du notebook
 6. `prepare` / `sync`

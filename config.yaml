@@ -103,24 +103,41 @@ watch:
 scan:
   whisper:
     model: auto                     # auto | large-v3 | medium | small
-    auto_vram_threshold_gb: 10      # >= seuil -> large-v3, sinon medium
-    device: cuda
+    auto_vram_threshold_gb: 10      # >= seuil -> large-v3 (T4 = 15 Go), sinon medium
+    fallback_models: [medium, small]  # essayés si mémoire GPU insuffisante
+    device: cuda                    # bascule auto sur cpu/int8 si aucun GPU
     compute_type: float16
+    batch_size: 16                  # BatchedInferencePipeline (x3-4 plus rapide sur T4) ; 0 = désactivé
     language: null                  # null = auto-détection
     beam_size: 5
     vad_filter: true
-    word_timestamps: true
+    word_timestamps: true           # toujours activé (requis pour les sous-titres mot à mot)
+  require_transcript: true          # false = continuer sans texte si whisper échoue
+  transcript_path: null             # réutiliser une transcription existante (re-scan sans GPU)
+  work_dir: null                    # checkpoints ; défaut <output_dir>/.work (notebook : sur Drive)
+  tmp_dir: null                     # WAV temporaire ; défaut /tmp/clipgod
   windows:
     min_seconds: 15
     max_seconds: 45
-    step_seconds: 5
+    length_step_seconds: 5          # longueurs testées : 15, 20, ..., 45
+    step_seconds: 5                 # pas de glissement
+  clip_min_seconds: null            # défaut : max(monetize min, 8)
+  clip_max_seconds: null            # défaut : monetize max - 0,5 (strictement < 30 s)
   top_k_moments: 3
+  min_score: 40                     # sous ce score, un moment n'est pas rendu (reste candidat)
+  max_candidates: 5                 # moments supplémentaires (sans hooks) gardés pour revue manuelle
   hooks_per_moment: 3
   hook_max_chars: 60
+  hook_language: en                 # en | fr (audience cible des campagnes)
   min_gap_between_moments_seconds: 30
+  most_replayed: true               # yt-dlp, VODs YouTube uniquement
   visual:
+    enabled: true
     sample_fps: 2
-    scene_threshold: 0.45
+    frame_width: 160
+    frame_height: 90
+    scene_threshold: 0.4            # distance de Bhattacharyya entre histogrammes
+    hwaccel: auto                   # auto (NVDEC si nvidia-smi) | cuda | none
   # Pondérations par défaut (utilisées si data/model.pkl absent)
   default_weights:
     audio_loudness_peak: 0.20
@@ -128,11 +145,16 @@ scan:
     text_hype_keywords: 0.20
     text_unfinished_then_burst: 0.10
     text_repetition: 0.05
+    text_speech_rate: 0.05
     visual_motion: 0.10
     visual_scene_changes: 0.05
     most_replayed: 0.20
-  hype_keywords: ["no way", "wtf", "oh my god", "omg", "let's go", "what", "bro", "insane",
-                  "putain", "c'est pas possible", "nooo", "clip", "run", "cops", "wanted"]
+  model_path: null                  # défaut : paths.model (data/model.pkl)
+  model_blend: 0.5                  # part max du modèle appris dans le score final
+  model_full_trust_samples: 50      # nb de clips à partir duquel le modèle a son poids max
+  hype_keywords: ["no way", "wtf", "oh my god", "omg", "let's go", "lets go", "what", "bro", "insane",
+                  "oh no", "nooo", "clip that", "clip it", "run", "cops", "wanted", "holy", "bruh",
+                  "putain", "c'est pas possible", "non non", "oh la la", "quoi"]
 
 # ---------------------------------------------------------------------
 # Module 4 — render (CLOUD GPU)
