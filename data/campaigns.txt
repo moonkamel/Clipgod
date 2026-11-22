@@ -1,0 +1,6 @@
+# Une campagne / chaîne cible par ligne. Formats acceptés :
+#   twitch:<login>
+#   youtube:<channel_id ou @handle>
+#   kick:<slug>
+#   whop:<campaign_slug>
+# Les lignes commençant par # sont ignorées.

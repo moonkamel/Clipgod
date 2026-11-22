@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipgod"
+version = "0.1.0"
+description = "Transforme streams et VODs GTA 6 en clips verticaux monétisables. Orchestration locale + calcul lourd sur GPU cloud gratuit (Colab/Kaggle) via Google Drive."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ClipGod contributors" }]
+keywords = ["clipping", "gta6", "shorts", "tiktok", "whisper", "colab"]
+
+# Dépendances LOCALES (laptop bas de gamme) : uniquement de l'orchestration légère.
+# Aucune dépendance GPU / vidéo lourde ici.
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+    "httpx>=0.27",
+    "google-api-python-client>=2.130",
+    "google-auth>=2.29",
+    "google-auth-oauthlib>=1.2",
+    "pydrive2>=1.19",
+    "yt-dlp>=2024.8.6",
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+    "joblib>=1.3",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+# Stack CLOUD (notebook Colab / Kaggle, GPU T4). Installée par scripts/colab_setup.sh.
+# Ne PAS installer sur le laptop.
+cloud = [
+    "faster-whisper>=1.0.3",
+    "opencv-python-headless>=4.9",
+    "librosa>=0.10.2",
+    "soundfile>=0.12",
+    "piper-tts>=1.2",
+]
+# Module watch (buffer live). Optionnel : consomme de la bande passante.
+watch = [
+    "streamlink>=6.8",
+    "websockets>=12.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+clipgod = "clipgod:main"
+
+[tool.setuptools]
+py-modules = ["clipgod"]
+packages = ["core", "modules"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

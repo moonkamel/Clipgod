@@ -1,0 +1,237 @@
+# =====================================================================
+#  ClipGod — configuration centrale
+#  Lue par le CLI local (laptop) ET par le notebook cloud (Colab/Kaggle).
+#  AUCUNE clé API ici : tout passe par des variables d'environnement
+#  (voir .env.example). Les noms des variables sont référencés ci-dessous.
+# =====================================================================
+
+project:
+  name: clipgod
+  game: "GTA 6"
+  timezone: "Europe/Paris"
+
+paths:
+  data: data
+  inbox: inbox
+  output: output
+  cache: cache
+  logs: logs
+  sources_json: data/sources.json
+  campaigns_txt: data/campaigns.txt
+  historical_scores: data/historical_scores.csv
+  model: data/model.pkl
+  rejected: data/rejected.json
+  state: data/state.json          # état local (jobs envoyés, clips synchronisés, checkpoints)
+  report: report.html
+
+# ---------------------------------------------------------------------
+# Lien laptop <-> cloud : Google Drive (seul canal de communication)
+# ---------------------------------------------------------------------
+drive:
+  root_folder: ClipGod
+  folders:
+    jobs: jobs
+    sources: sources
+    moments: moments
+    clips: clips
+    jobs_done: jobs_done
+  # Côté laptop : OAuth "installed app". Fichiers référencés via env :
+  #   CLIPGOD_GDRIVE_CLIENT_SECRETS  (chemin vers client_secrets.json)
+  #   CLIPGOD_GDRIVE_TOKEN           (chemin du token OAuth mis en cache)
+  credentials_env: CLIPGOD_GDRIVE_CLIENT_SECRETS
+  token_env: CLIPGOD_GDRIVE_TOKEN
+  # Côté Colab : Drive monté sur /content/drive/MyDrive
+  colab_mount: /content/drive
+  colab_root: /content/drive/MyDrive/ClipGod
+  # Côté Kaggle : pas de montage Drive natif -> working dir + sync API
+  kaggle_root: /kaggle/working/ClipGod
+  upload_chunk_mb: 32
+  max_retries: 5
+
+# ---------------------------------------------------------------------
+# Module 1 — discover (laptop)
+# ---------------------------------------------------------------------
+discover:
+  platforms: [youtube, twitch, kick]
+  cache_ttl_seconds: 300            # cache local 5 min
+  max_vod_age_hours: 24
+  min_duration_minutes: 45
+  max_results_per_platform: 25
+  min_viewers: 500
+  keywords: ["GTA 6", "GTA VI", "Grand Theft Auto VI", "GTA6"]
+  twitch_game_name: "Grand Theft Auto VI"
+  rank_by: viewers_per_hour          # ratio viewers / heure de stream
+  env:
+    youtube_api_key: YOUTUBE_API_KEY
+    twitch_client_id: TWITCH_CLIENT_ID
+    twitch_client_secret: TWITCH_CLIENT_SECRET
+
+# ---------------------------------------------------------------------
+# Module 2 — watch (laptop ou petit VPS) — gourmand en bande passante
+# ---------------------------------------------------------------------
+watch:
+  disable-watch: true               # true = module désactivé
+  buffer_minutes: 8
+  segment_seconds: 60
+  post_trigger_minutes: 2
+  chat_poll_seconds: 2
+  quality: "720p,best"
+  hype:
+    sigma_threshold: 2.0            # seuil = moyenne + 2 écarts-types
+    baseline_window_seconds: 300
+    weights:
+      chat_velocity: 0.5
+      new_chatters: 0.2
+      reaction_ratio: 0.3
+    reaction_patterns: ["WTF", "NO WAY", "CLIP THAT", "CLIP IT", "OMG", "LMAO", "KEKW", "POG", "😂", "💀", "🔥", "😱"]
+  reconnect:
+    max_attempts: 3
+    backoff_base_seconds: 5         # 5s, 10s, 20s
+  cooldown_seconds: 120             # évite deux déclenchements sur le même moment
+
+# ---------------------------------------------------------------------
+# Module 3 — scan (CLOUD GPU)
+# ---------------------------------------------------------------------
+scan:
+  whisper:
+    model: auto                     # auto | large-v3 | medium | small
+    auto_vram_threshold_gb: 10      # >= seuil -> large-v3, sinon medium
+    device: cuda
+    compute_type: float16
+    language: null                  # null = auto-détection
+    beam_size: 5
+    vad_filter: true
+    word_timestamps: true
+  windows:
+    min_seconds: 15
+    max_seconds: 45
+    step_seconds: 5
+  top_k_moments: 3
+  hooks_per_moment: 3
+  hook_max_chars: 60
+  min_gap_between_moments_seconds: 30
+  visual:
+    sample_fps: 2
+    scene_threshold: 0.45
+  # Pondérations par défaut (utilisées si data/model.pkl absent)
+  default_weights:
+    audio_loudness_peak: 0.20
+    audio_loudness_delta: 0.10
+    text_hype_keywords: 0.20
+    text_unfinished_then_burst: 0.10
+    text_repetition: 0.05
+    visual_motion: 0.10
+    visual_scene_changes: 0.05
+    most_replayed: 0.20
+  hype_keywords: ["no way", "wtf", "oh my god", "omg", "let's go", "what", "bro", "insane",
+                  "putain", "c'est pas possible", "nooo", "clip", "run", "cops", "wanted"]
+
+# ---------------------------------------------------------------------
+# Module 4 — render (CLOUD GPU)
+# ---------------------------------------------------------------------
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  codec: libx264
+  crf: 20
+  preset: medium
+  audio_bitrate: 192k
+  loudness_lufs: -14
+  layout:
+    facecam_detector: yunet
+    yunet_model_url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    gameplay_ratio: 0.70            # gameplay en haut 70%
+    facecam_ratio: 0.30             # facecam en bas 30%
+    separator_blur: 25
+    smoothing_alpha: 0.15           # lissage du recadrage
+  subtitles:
+    font: "Montserrat-ExtraBold"
+    font_size: 86
+    outline: 6
+    y_position_ratio: 0.64
+    uppercase: true
+    highlight_color: "&H0000FFFF"   # ASS BGR (jaune)
+  hook:
+    duration_seconds: 2.0
+    font_size: 72
+    box_color: "white"
+    text_color: "black"
+    animation: pop
+  streamer_overlay:
+    enabled: true
+    template: "@{streamer}"
+    font_size: 44
+    y_position_ratio: 0.94
+  voiceover:
+    enabled: false                  # flag --voiceover
+    engine: piper
+    voice: "en_US-ryan-high"
+
+# ---------------------------------------------------------------------
+# Module 5 — publish (laptop)
+# ---------------------------------------------------------------------
+publish:
+  platforms: [youtube_shorts, tiktok, instagram_reels]
+  backend: upload_post              # upload_post | youtube_api | dry_run
+  test_mode: true                   # true = privé / non listé, aucune diffusion publique
+  max_posts_per_day: 6
+  slots:                            # heures locales de forte audience
+    eu_morning: ["08:30", "11:00"]
+    us_evening: ["00:30", "01:30", "02:30", "03:30"]   # 18h30-21h30 EST, exprimé en heure de Paris
+  ab_testing:
+    enabled: true
+    hooks_per_clip: 3
+  youtube_quota:
+    daily_units: 10000
+    upload_cost: 1600
+    safety_margin: 200
+  env:
+    upload_post_api_key: UPLOAD_POST_API_KEY
+    youtube_client_secrets: YOUTUBE_CLIENT_SECRETS
+
+# ---------------------------------------------------------------------
+# Module 6 — monetize (laptop)
+# ---------------------------------------------------------------------
+monetize:
+  whop_rewards_url: "https://whop.com/discover/content-rewards/"
+  scrape_cache_seconds: 1800
+  user_agent: "Mozilla/5.0 (compatible; ClipGod/0.1)"
+  min_cpm_usd: 0.5
+  min_budget_remaining_usd: 100
+  rules_default:
+    min_duration_seconds: 7
+    max_duration_seconds: 30
+    hook_within_seconds: 1.0
+    require_transformation: true    # pas de simple re-upload
+
+# ---------------------------------------------------------------------
+# Module 7 — learn (laptop, CPU)
+# ---------------------------------------------------------------------
+learn:
+  checkpoints_hours: [1, 6, 24, 72]
+  retrain_every_n_clips: 20
+  retrain_every_days: 7
+  target: views_24h
+  model:
+    type: GradientBoostingRegressor
+    n_estimators: 300
+    learning_rate: 0.05
+    max_depth: 3
+    random_state: 42
+  min_samples_to_train: 10
+
+# ---------------------------------------------------------------------
+# Logs / robustesse
+# ---------------------------------------------------------------------
+logging:
+  level: INFO
+  file: logs/clipgod.log
+  json: true
+  rotate_mb: 10
+  backups: 5
+
+pipeline:
+  checkpoints: true
+  retry_attempts: 3
+  retry_backoff_seconds: 2

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets — JAMAIS commités
+.env
+client_secrets*.json
+*token*.json
+credentials*.json
+
+# Données runtime (générées)
+inbox/*
+output/*
+cache/*
+logs/*
+!inbox/.gitkeep
+!output/.gitkeep
+!cache/.gitkeep
+!cache/buffer/
+cache/buffer/*
+!cache/buffer/.gitkeep
+!logs/.gitkeep
+data/sources.json
+data/state.json
+data/rejected.json
+data/model.pkl
+report.html
+*.mp4
+*.mkv
+*.ts
