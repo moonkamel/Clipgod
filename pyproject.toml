@@ -54,7 +54,7 @@ watch = [
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.12",
-    "ruff>=0.5",
+    "ruff==0.17.6",                 # version figée : mêmes règles en local et en CI
 ]
 
 [project.scripts]
