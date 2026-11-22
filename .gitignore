@@ -11,6 +11,7 @@ dist/
 
 # Secrets — JAMAIS commités
 .env
+secrets/
 client_secrets*.json
 *token*.json
 credentials*.json

@@ -18,6 +18,11 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from core.config import ConfigError, load_config
+from core.drive import DriveError
+from core.logger import setup_logging
+from core.storage import ensure_project_dirs
+
 app = typer.Typer(
     name="clipgod",
     help="ClipGod — streams/VODs GTA 6 -> clips verticaux monétisables.",
@@ -34,14 +39,23 @@ console = Console()
 @app.callback()
 def _global_options(
     ctx: typer.Context,
-    config: Path = typer.Option(
-        Path("config.yaml"), "--config", "-c", help="Chemin vers config.yaml.", exists=False
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Chemin vers config.yaml (défaut : $CLIPGOD_CONFIG, ./config.yaml)."
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Logs DEBUG en console."),
     dry_run: bool = typer.Option(False, "--dry-run", help="N'écrit rien / ne publie rien."),
 ) -> None:
-    """Options partagées par toutes les commandes (stockées dans ctx.obj)."""
-    ctx.obj = {"config_path": config, "verbose": verbose, "dry_run": dry_run}
+    """Charge la config, initialise les logs et les dossiers locaux (stockés dans ctx.obj)."""
+    if ctx.resilient_parsing:  # complétion shell : ne rien charger
+        return
+    try:
+        cfg = load_config(config)
+    except ConfigError as exc:
+        console.print(f"[red]Erreur de configuration :[/] {exc}")
+        raise typer.Exit(1) from None
+    setup_logging(cfg, level="DEBUG" if verbose else None)
+    ensure_project_dirs(cfg)
+    ctx.obj = {"config": cfg, "verbose": verbose, "dry_run": dry_run}
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +212,9 @@ def main() -> None:
         app()
     except NotImplementedError as exc:  # squelette : sortie propre plutôt qu'une trace brute
         console.print(f"[yellow]Pas encore implémenté :[/] {exc}")
+        raise SystemExit(1) from None
+    except (ConfigError, DriveError) as exc:
+        console.print(f"[red]Erreur :[/] {exc}")
         raise SystemExit(1) from None
 
 

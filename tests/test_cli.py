@@ -28,3 +28,11 @@ def test_scan_and_render_are_importable_without_heavy_deps():
     from modules.scan import scan
 
     assert callable(scan) and callable(render)
+
+
+def test_invalid_config_exits_1(tmp_path):
+    bad = tmp_path / "config.yaml"
+    bad.write_text("paths: {}\n")
+    result = runner.invoke(app, ["--config", str(bad), "sync"])
+    assert result.exit_code == 1
+    assert "Section obligatoire" in result.output

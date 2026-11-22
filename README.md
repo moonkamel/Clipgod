@@ -100,7 +100,30 @@ Optionnel, seulement si vous activez `watch` : `pip install -e ".[watch]"`.
 | `UPLOAD_POST_API_KEY` | publish | backend de publication (ou `backend: youtube_api` / `dry_run`) |
 | `YOUTUBE_CLIENT_SECRETS` | publish | ID client OAuth pour l'upload YouTube |
 
-Aucune clé n'est jamais écrite en dur ni dans `config.yaml`.
+Aucune clé n'est jamais écrite en dur ni dans `config.yaml`. Toute valeur de config peut aussi être
+surchargée par variable d'environnement : `CLIPGOD__SCAN__WHISPER__MODEL=medium`.
+
+### Connexion à Google Drive (laptop) — deux options
+
+**Option A — Google Drive pour ordinateur (le plus simple, aucun OAuth).** Installez l'application
+Google Drive, puis indiquez le dossier synchronisé dans `config.yaml` :
+
+```yaml
+drive:
+  local_root: "G:/Mon Drive/ClipGod"     # Windows ; macOS : ~/Library/CloudStorage/GoogleDrive-<compte>/My Drive/ClipGod
+```
+
+**Option B — API Drive (OAuth).**
+1. Google Cloud Console → créer un projet → *API et services* → activer **Google Drive API**.
+2. *Écran de consentement OAuth* → type « Externe », ajoutez votre adresse comme utilisateur test.
+3. *Identifiants* → *Créer* → **ID client OAuth** → « Application de bureau » → télécharger le JSON
+   dans `secrets/client_secrets.json` (dossier ignoré par git).
+4. Au premier `clipgod prepare` / `sync`, un navigateur s'ouvre pour l'autorisation ; le token est mis en
+   cache dans `secrets/drive_token.json`.
+
+Le scope demandé est `drive` (et non `drive.file`) : sinon le laptop ne verrait pas les clips écrits par
+le notebook Colab. Pour **Kaggle**, copiez le contenu de `secrets/drive_token.json` dans un secret Kaggle
+nommé `CLIPGOD_GDRIVE_TOKEN_JSON`.
 
 ---
 
@@ -243,7 +266,7 @@ pytest
 ## Feuille de route
 
 1. ✅ Squelette : arborescence, `pyproject.toml`, `config.yaml`, README, CLI Typer
-2. `core/config.py`, `core/drive.py` (+ `logger.py`, `storage.py`)
+2. ✅ `core/config.py`, `core/drive.py`, `core/logger.py`, `core/storage.py`
 3. `modules/scan.py` + `core/scoring.py`
 4. `notebooks/clipgod_colab.ipynb` + `scripts/colab_setup.sh`
 5. `modules/render.py` + mise à jour du notebook

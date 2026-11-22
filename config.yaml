@@ -28,6 +28,13 @@ paths:
 # Lien laptop <-> cloud : Google Drive (seul canal de communication)
 # ---------------------------------------------------------------------
 drive:
+  # auto  : Colab -> montage ; laptop avec local_root -> dossier synchronisé ; sinon -> API Drive
+  # local : dossier local (montage Colab ou « Google Drive pour ordinateur » sur le laptop)
+  # api   : API Drive v3 (OAuth)
+  backend: auto
+  # Laptop avec Google Drive pour ordinateur (optionnel, évite l'OAuth) :
+  #   Windows : "G:/Mon Drive/ClipGod"   macOS : "~/Library/CloudStorage/GoogleDrive-<compte>/My Drive/ClipGod"
+  local_root: null
   root_folder: ClipGod
   folders:
     jobs: jobs
@@ -35,9 +42,10 @@ drive:
     moments: moments
     clips: clips
     jobs_done: jobs_done
-  # Côté laptop : OAuth "installed app". Fichiers référencés via env :
+  # Backend API : OAuth "application de bureau". Chemins référencés via env :
   #   CLIPGOD_GDRIVE_CLIENT_SECRETS  (chemin vers client_secrets.json)
-  #   CLIPGOD_GDRIVE_TOKEN           (chemin du token OAuth mis en cache)
+  #   CLIPGOD_GDRIVE_TOKEN           (chemin du token OAuth mis en cache, défaut secrets/drive_token.json)
+  #   CLIPGOD_GDRIVE_TOKEN_JSON      (CONTENU du token — Kaggle/headless, via secret Kaggle)
   credentials_env: CLIPGOD_GDRIVE_CLIENT_SECRETS
   token_env: CLIPGOD_GDRIVE_TOKEN
   # Côté Colab : Drive monté sur /content/drive/MyDrive

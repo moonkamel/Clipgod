@@ -24,7 +24,6 @@ dependencies = [
     "google-api-python-client>=2.130",
     "google-auth>=2.29",
     "google-auth-oauthlib>=1.2",
-    "pydrive2>=1.19",
     "yt-dlp>=2024.8.6",
     "pandas>=2.1",
     "numpy>=1.26",
@@ -68,3 +67,7 @@ addopts = "-q"
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Typer déclare ses options via des appels en valeur par défaut ; Optional[...] gardé pour la lisibilité CLI.
+"clipgod.py" = ["B008", "UP045"]
