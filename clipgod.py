@@ -7,7 +7,7 @@ Les modules lourds `scan` et `render` sont exécutés sur GPU cloud (Colab/Kaggl
 via les notebooks ; les commandes `scan` / `render` ci-dessous existent pour le
 debug local sur de petits extraits ou une machine équipée d'un GPU.
 
-Statut : squelette — chaque commande lève NotImplementedError.
+Chaque commande retourne le code 0 en cas de succès, 1 en cas d'erreur (message lisible, détails dans logs/).
 """
 
 from __future__ import annotations
@@ -482,9 +482,29 @@ def watch(
     ctx: typer.Context,
     url: str = typer.Argument(..., help="URL du live (YouTube / Twitch / Kick)."),
     force: bool = typer.Option(False, "--force", help="Ignore disable-watch de config.yaml."),
+    quality: Optional[str] = typer.Option(None, "--quality", help="Qualité streamlink (ex. 720p60, 480p, best)."),
+    no_chat: bool = typer.Option(False, "--no-chat", help="Buffer seul, captures manuelles uniquement (touche c)."),
+    auto_prepare: Optional[bool] = typer.Option(None, "--auto-prepare/--no-auto-prepare",
+                                                help="Envoie chaque capture au notebook automatiquement."),
 ) -> None:
     """Buffer roulant 8 min + détection de hype dans le chat -> inbox/raw_<timestamp>.mp4."""
-    raise NotImplementedError("watch : à implémenter (étape 12).")
+    from modules.watch import WatchError
+    from modules.watch import watch as run_watch
+
+    cfg = ctx.obj["config"]
+    if (cfg.get("watch") or {}).get("disable-watch", True) and not force:
+        console.print("[yellow]watch est désactivé[/] (watch.disable-watch: true dans config.yaml) car il télécharge "
+                      "le live en continu. Relancez avec [bold]--force[/] ou passez l'option à false.")
+        raise typer.Exit(1)
+    try:
+        state = run_watch(cfg, url, quality=quality, with_chat=not no_chat, auto_prepare=auto_prepare, console=console)
+    except WatchError as exc:
+        console.print(f"[red]watch :[/] {exc}")
+        raise typer.Exit(1) from None
+    ready = [c for c in state.captures if c.status in ("ready", "sent")]
+    console.print(f"[green]✔ {len(ready)} capture(s)[/] dans inbox/")
+    for c in ready:
+        console.print(f"  clipgod prepare --source {c.file}" + ("  [dim](déjà envoyée)[/]" if c.status == "sent" else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +540,7 @@ def main() -> None:
     """Point d'entrée console (`clipgod ...`). Convertit les erreurs en code de sortie 1."""
     try:
         app()
-    except NotImplementedError as exc:  # squelette : sortie propre plutôt qu'une trace brute
+    except NotImplementedError as exc:  # garde-fou : sortie propre plutôt qu'une trace brute
         console.print(f"[yellow]Pas encore implémenté :[/] {exc}")
         raise SystemExit(1) from None
     except (ConfigError, DriveError) as exc:

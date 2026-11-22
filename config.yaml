@@ -88,44 +88,32 @@ discover:
 # Module 2 — watch (laptop ou petit VPS) — gourmand en bande passante
 # ---------------------------------------------------------------------
 watch:
-  disable-watch: true               # true = module désactivé
+  disable-watch: true               # true = module désactivé (clipgod watch --force pour l'utiliser quand même)
   buffer_minutes: 8
   segment_seconds: 60
   post_trigger_minutes: 2
   chat_poll_seconds: 2
-  quality: "720p,best"
+  quality: "720p,best"              # qualité streamlink (720p60, 480p, best…)
+  cooldown_seconds: 120             # évite deux déclenchements sur le même moment
+  auto_prepare: false               # true = chaque capture est envoyée au notebook automatiquement
+  keep_buffer_on_exit: false
+  youtube_chat_min_poll_seconds: 10 # API Live Chat : 5 unités de quota par lecture
   hype:
-    sigma_threshold: 2.0            # seuil = moyenne + 2 écarts-types
-    baseline_window_seconds: 300
+    sigma_threshold: 2.0            # seuil = moyenne + 2 écarts-types du score
+    baseline_window_seconds: 300    # « normale » calculée sur les 5 dernières minutes
+    min_warmup_seconds: 60          # pas de déclenchement pendant la 1re minute (calibrage)
     weights:
       chat_velocity: 0.5
       new_chatters: 0.2
       reaction_ratio: 0.3
-    reaction_patterns: ["WTF", "NO WAY", "CLIP THAT", "CLIP IT", "OMG", "LMAO", "KEKW", "POG", "😂", "💀", "🔥", "😱"]
+    reaction_patterns: ["WTF", "NO WAY", "CLIP THAT", "CLIP IT", "OMG", "LMAO", "LMFAO", "KEKW", "LUL", "OMEGALUL",
+                        "POG", "POGGERS", "HOLY", "INSANE", "😂", "💀", "🔥", "😱"]   # pas « bro » : trop courant
   reconnect:
     max_attempts: 3
-    backoff_base_seconds: 5         # 5s, 10s, 20s
-  cooldown_seconds: 120             # évite deux déclenchements sur le même moment
-
-# ---------------------------------------------------------------------
-# Lien laptop -> Drive : prepare / sync (laptop)
-# ---------------------------------------------------------------------
-prepare:
-  # auto  : YouTube -> téléchargé sur le laptop (YouTube bloque souvent les IP Colab),
-  #         Twitch/Kick -> téléchargé par le notebook (épargne la connexion du laptop)
-  # local : toujours télécharger sur le laptop puis uploader dans ClipGod/sources/
-  # cloud : le notebook télécharge toujours lui-même
-  download: auto
-  download_dir: cache/downloads
-  max_height: 1080
-  keep_local_download: false        # supprimer la VOD locale une fois uploadée
-  dedupe: true                      # refuse un 2e job pour la même vidéo (sauf --force)
-  colab_url: "https://colab.research.google.com/github/moonkamel/clipgod/blob/main/notebooks/clipgod_colab.ipynb"
-
-sync:
-  clips_dir: output/clips
-  moments_dir: output/moments
-  cleanup_sources: true             # retire la vidéo source de Drive après synchro (quota gratuit 15 Go)
+    backoff_base_seconds: 5         # 5 s, 10 s, 20 s
+  kick:
+    pusher_key: "32cbd69e4b950bf97679"   # clé publique du WebSocket de chat de Kick (peut changer)
+    pusher_cluster: us2
 
 # ---------------------------------------------------------------------
 # Module 3 — scan (CLOUD GPU)

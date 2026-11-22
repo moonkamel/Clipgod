@@ -4,8 +4,7 @@
 > (Whop Content Rewards et équivalents). Aucun SaaS payant : tout est open source, et le calcul lourd tourne
 > sur le **GPU T4 gratuit** de Google Colab ou Kaggle.
 
-**Statut :** squelette. Les commandes existent mais lèvent `NotImplementedError` ; elles sont implémentées
-module par module (voir [Feuille de route](#feuille-de-route)).
+**Statut :** les 12 modules sont implémentés et testés (149 tests automatisés). Installation pas à pas : [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
 ---
 
@@ -389,14 +388,28 @@ Enchaîne `discover` + `prepare`, puis affiche :
 
 ### Mode live (optionnel) — `watch`
 
-Désactivé par défaut (`watch.disable-watch: true`) car il consomme de la bande passante en continu.
+Désactivé par défaut (`watch.disable-watch: true`) car il télécharge le live en continu. Il nécessite l'extra
+`[watch]` (streamlink et websockets) et ffmpeg sur la machine.
 
 ```bash
-clipgod watch https://www.twitch.tv/<login> --force
+pip install -e ".[watch]"
+clipgod watch https://www.twitch.tv/<chaine> --force          # Twitch, Kick ou YouTube
+clipgod watch <url> --force --auto-prepare                     # envoie chaque capture au notebook tout de suite
 ```
 
-Buffer roulant de 8 min ; quand le score de hype du chat dépasse moyenne + 2σ, les 8 min passées + 2 min suivantes
-sont sauvegardées dans `inbox/raw_<timestamp>.mp4`, prêtes pour `clipgod prepare`.
+- **Buffer roulant** : `streamlink | ffmpeg` écrit le live en segments d'une minute dans `cache/buffer/`. Seuls les
+  8 derniers sont gardés, donc l'espace disque reste constant (~200 Mo en 720p).
+- **Chat**, analysé toutes les 2 s :
+  - Twitch : IRC anonyme, sans clé ;
+  - Kick : WebSocket public ;
+  - YouTube : API Live Chat, 5 unités de quota par lecture, donc relue toutes les 10 s au plus.
+- **Score de hype** : vitesse du chat, nouveaux chatteurs et part de messages réactionnels, chacun comparé à la
+  normale des 5 dernières minutes. Le déclenchement a lieu au-delà de **moyenne + 2σ**, sans déclenchement pendant
+  la 1ʳᵉ minute (calibrage), puis avec 120 s de cooldown.
+- **Capture** : les 8 minutes passées plus les 2 suivantes, assemblées sans réencodage dans
+  `inbox/raw_<date>.mp4`, prêtes pour `clipgod prepare`.
+- **Coupure** : 3 reconnexions (5 s, 10 s, 20 s), puis arrêt propre. Les captures en cours sont finalisées.
+- **Touches** : `c` capture manuelle, `p` envoie la dernière capture au notebook, `q` ou Ctrl+C pour quitter.
 
 ---
 
@@ -473,7 +486,7 @@ pytest
 6. ✅ `prepare` / `sync`
 7. ✅ Notebook Kaggle
 8. ✅ `discover` · 9. ✅ `publish` · 10. ✅ `monetize` · 11. ✅ `learn`
-12. `watch`
+12. ✅ `watch`
 
 ## Usage responsable
 

@@ -105,7 +105,7 @@ class DriveBackend(ABC):
         rel = self.norm(remote)
         return f"{self.root_name}/{rel}" if rel else self.root_name
 
-    # -- primitives (à implémenter) ---------------------------------------
+    # -- primitives (implémentées par chaque backend) ---------------------------------------
     @abstractmethod
     def makedirs(self, remote: str) -> None: ...
 

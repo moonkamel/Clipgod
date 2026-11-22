@@ -435,5 +435,17 @@ puis : Planificateur de tâches › *Créer une tâche de base* › Déclencheur
 Les journaux détaillés sont dans **`logs/clipgod.log`** (une ligne JSON par événement). Ajoutez `-v` à
 n'importe quelle commande pour plus de détails : `clipgod -v sync`.
 
-> `clipgod watch` (surveillance des lives) n'est pas encore disponible : c'est la dernière étape de la feuille
-> de route. Le reste du pipeline fonctionne sans lui.
+### Surveillance des lives (`watch`, optionnel)
+
+```bash
+pip install -e ".[watch]"                                 # streamlink + websockets
+clipgod watch https://www.twitch.tv/<chaine> --force
+```
+
+| Symptôme | Solution |
+|---|---|
+| « watch est désactivé » | Ajoutez `--force`, ou mettez `watch.disable-watch: false` dans `config.yaml`. |
+| « streamlink n'est pas installé » | `pip install -e ".[watch]"` (environnement activé). |
+| Le chat Kick ne se connecte pas | Kick a changé sa clé de WebSocket : mettez la nouvelle dans `watch.kick.pusher_key`. Le buffer et la capture manuelle (`c`) fonctionnent quand même. |
+| Chat YouTube « quota YouTube bas » | La lecture du chat coûte 5 unités ; elle se suspend pour garder de quoi publier. |
+| Connexion lente / coupures | `--quality 480p` divise le débit par deux environ. |
