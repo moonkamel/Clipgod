@@ -190,3 +190,12 @@ def test_cli_prepare_and_sync_status(env, monkeypatch):
     res = runner.invoke(clipgod.app, ["--config", str(tmp / "config.yaml"), "run"])
     assert res.exit_code == 1 and "discover" in res.output              # aucune clé API -> aucune VOD
     assert json.loads((tmp / "data" / "state.json").read_text())["jobs"]
+
+
+def test_prepare_reports_phases(env):
+    cfg, drive, tmp = env
+    vod = tmp / "phase.mp4"
+    vod.write_bytes(b"z" * 100)
+    phases = []
+    P.prepare(str(vod), cfg, drive, on_phase=phases.append)
+    assert phases == ["envoi vers Google Drive"]

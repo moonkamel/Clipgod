@@ -203,7 +203,9 @@ def load_detector(rcfg: Mapping[str, Any]) -> YuNetDetector | None:
     if model is None:
         return None
     try:
-        return YuNetDetector(model, float(lcfg.get("face_score_threshold", 0.7)))
+        detector = YuNetDetector(model, float(lcfg.get("face_score_threshold", 0.7)))
+        log.info("Détection de visages YuNet prête (%s).", Path(url).name)
+        return detector
     except Exception as exc:  # noqa: BLE001 — OpenCV trop ancien, modèle corrompu…
         log.warning("YuNet indisponible (%s) : détection de facecam désactivée.", exc)
         return None
@@ -211,6 +213,31 @@ def load_detector(rcfg: Mapping[str, Any]) -> YuNetDetector | None:
 
 def analyze_faces(frames: Sequence[tuple[float, np.ndarray]], detector: Any) -> list[FaceSample]:
     return [FaceSample(t, detector(frame)) for t, frame in frames]
+
+
+def hook_y_ratio(samples: Sequence[FaceSample], layout: Layout, *, src_aspect: float, out_aspect: float,
+                 default: float = 0.2) -> float:
+    """Hauteur (0..1) du hook : ``default``, ou juste sous le visage si un visage occupe cette zone du clip.
+
+    Ne concerne que le recadrage centré pleine hauteur (en layout facecam, le visage est dans le panneau du bas).
+    """
+    if layout.kind != "center" or not samples or src_aspect <= out_aspect:
+        return default
+    window = min(1.0, out_aspect / src_aspect)                  # largeur de la fenêtre 9:16 dans la source
+    centre = float(np.mean([x for _, x in layout.track])) if layout.track else 0.5
+    visible = []
+    for s in samples:
+        inside = [f for f in s.faces if abs(f[0] - centre) < window / 2 and f[2] >= 0.02]
+        if inside:
+            visible.append(max(inside, key=lambda f: f[2] * f[3]))
+    if len(visible) < 0.3 * len(samples):
+        return default
+    cy = float(np.median([f[1] for f in visible]))
+    fh = float(np.median([f[3] for f in visible]))
+    face_zone = (cy - fh, cy + 2.2 * fh)                         # tête + épaules / cadre de la webcam
+    if default + 0.06 < face_zone[0] or default - 0.06 > face_zone[1]:
+        return default
+    return round(min(0.5, face_zone[1] + 0.04), 3)
 
 
 def decide_layout(samples: Sequence[FaceSample], lcfg: Mapping[str, Any], *, src_aspect: float,
@@ -362,7 +389,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Sub,{font},{int(sub.get("font_size", 86))},{base_color},{base_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{int(sub.get("outline", 6))},2,5,60,60,0,1
-Style: Hook,{font},{int(hk.get("font_size", 72))},{_ass_color(hk.get("text_color", "black"), "&H00000000")},&H00000000,{_ass_color(hk.get("box_color", "white"), "&H00FFFFFF")},&H00000000,-1,0,0,0,100,100,0,0,3,{int(hk.get("box_padding", 18))},0,5,90,90,0,1
+Style: Hook,{font},{int(hk.get("font_size", 92))},{_ass_color(hk.get("text_color", "black"), "&H00000000")},&H00000000,{_ass_color(hk.get("box_color", "white"), "&H00FFFFFF")},&H00000000,-1,0,0,0,100,100,0,0,3,{int(hk.get("box_padding", 22))},0,5,90,90,0,1
 Style: Tag,{font},{int(tag.get("font_size", 44))},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,5,40,40,0,1
 
 [Events]
@@ -602,7 +629,17 @@ def render_moment(moment: Mapping[str, Any], video_path: str, output_dir: Path, 
     panel_h = out_h - int(out_h * float(lcfg.get("gameplay_ratio", 0.70))) // 2 * 2
     layout = decide_layout(samples, lcfg, src_aspect=src_w / src_h, manual_region=manual,
                            panel_aspect=out_w / max(1, panel_h))
-    log.info("layout %s pour %s_%d", layout.kind, video_id, idx, extra={"facecam": layout.facecam})
+    with_faces = sum(1 for s in samples if s.faces)
+    if detector is None and not manual:
+        log.info("Détection de visages inactive (YuNet non chargé) : layout %s par défaut.", layout.kind)
+    log.info("layout %s pour %s_%d · visages dans %d/%d images", layout.kind, video_id, idx, with_faces,
+             len(samples), extra={"facecam": layout.facecam})
+    hk = rcfg.get("hook") or {}
+    hook_y = hook_y_ratio(samples, layout, src_aspect=src_w / src_h, out_aspect=out_w / out_h,
+                          default=float(hk.get("y_position_ratio", 0.2)))
+    if hook_y != float(hk.get("y_position_ratio", 0.2)):
+        log.info("hook déplacé à %.0f %% de la hauteur pour ne pas couvrir le visage", hook_y * 100)
+    text_cfg = {**rcfg, "hook": {**hk, "y_position_ratio": hook_y}}
 
     vfilter = video_filter(layout, src_w=src_w, src_h=src_h, rcfg=rcfg)
     target = float(rcfg.get("loudness_lufs", -14))
@@ -617,7 +654,7 @@ def render_moment(moment: Mapping[str, Any], video_path: str, output_dir: Path, 
         single_pass = len(pending) == 1 and not voiceover
         # Passe A : layout + sous-titres + @streamer + audio normalisé (+ hook si une seule variante).
         base_ass = tmp / "base.ass"
-        base_ass.write_text(build_ass(words=words, clip_start=start, clip_duration=duration, rcfg=rcfg,
+        base_ass.write_text(build_ass(words=words, clip_start=start, clip_duration=duration, rcfg=text_cfg,
                                       streamer=streamer, hook=pending[0][1] if single_pass else None),
                             encoding="utf-8")
         afilter = (f"[0:a]{loudnorm_filter(target, measured)},aresample=48000[al]"
@@ -648,7 +685,7 @@ def render_moment(moment: Mapping[str, Any], video_path: str, output_dir: Path, 
             vo_used = False
             if not single_pass:
                 hook_ass = tmp / f"hook_{k}.ass"
-                hook_ass.write_text(build_ass(words=[], clip_start=start, clip_duration=duration, rcfg=rcfg,
+                hook_ass.write_text(build_ass(words=[], clip_start=start, clip_duration=duration, rcfg=text_cfg,
                                               hook=hook, include_subtitles=False), encoding="utf-8")
                 inputs = ["-i", str(base_out)]
                 agraph = "[0:a]anull[a]"

@@ -170,6 +170,9 @@ class YouTubeDiscover:
         self._spend(100, "search.list")
         params: dict[str, Any] = {"part": "id", "q": query, "type": "video", "order": "viewCount",
                                   "maxResults": min(50, limit)}
+        languages = (self.cfg.get("discover") or {}).get("languages") or []
+        if languages:
+            params["relevanceLanguage"] = str(languages[0])   # oriente la recherche vers l'audience visée
         if live:
             params["eventType"] = "live"
         else:
@@ -202,6 +205,12 @@ class YouTubeDiscover:
         return out
 
 
+def _yt_language(snippet: Mapping[str, Any]) -> str | None:
+    """Langue déclarée de la vidéo (audio de préférence) : ``"en-US"`` -> ``"en"``."""
+    lang = snippet.get("defaultAudioLanguage") or snippet.get("defaultLanguage")
+    return str(lang).split("-")[0].lower() if lang else None
+
+
 def youtube_items(videos: Iterable[Mapping[str, Any]], *, now: datetime, campaigns: CampaignTargets,
                   campaign_ids: set[str] = frozenset()) -> list[SourceItem]:
     items = []
@@ -220,7 +229,8 @@ def youtube_items(videos: Iterable[Mapping[str, Any]], *, now: datetime, campaig
                 url=f"https://www.youtube.com/watch?v={v['id']}", title=sn.get("title", ""),
                 viewers=int(live.get("concurrentViewers") or 0), duration=(now - started).total_seconds(),
                 streamer=channel, platform="youtube", status="live", published_at=started.isoformat(),
-                views_per_hour=float(live.get("concurrentViewers") or 0), campaign=campaign, id=v["id"]))
+                views_per_hour=float(live.get("concurrentViewers") or 0), campaign=campaign, id=v["id"],
+                extra={"language": _yt_language(sn)}))
         else:
             published = parse_ts(live.get("actualEndTime")) or parse_ts(sn.get("publishedAt")) or now
             views = int(st.get("viewCount") or 0)
@@ -229,7 +239,7 @@ def youtube_items(videos: Iterable[Mapping[str, Any]], *, now: datetime, campaig
                 url=f"https://www.youtube.com/watch?v={v['id']}", title=sn.get("title", ""), viewers=views,
                 duration=parse_iso8601_duration(v.get("contentDetails", {}).get("duration")), streamer=channel,
                 platform="youtube", status="vod", published_at=published.isoformat(), views_per_hour=views / hours,
-                campaign=campaign, id=v["id"]))
+                campaign=campaign, id=v["id"], extra={"language": _yt_language(sn)}))
     return items
 
 
@@ -450,6 +460,26 @@ def discover_kick(cfg: Mapping[str, Any], campaigns: CampaignTargets, *, now: da
 # ---------------------------------------------------------------------------
 # Filtre, classement, cache
 # ---------------------------------------------------------------------------
+def language_ok(item: SourceItem, dcfg: Mapping[str, Any]) -> bool:
+    """Langue compatible avec ``discover.languages`` (vide = toutes).
+
+    Langue déclarée par la plateforme si elle existe ; sinon, un titre écrit dans une autre écriture que
+    l'alphabet latin (hindi, arabe, russe…) est écarté quand toutes les langues visées s'écrivent en latin.
+    """
+    from core.scoring import is_latin_text
+
+    wanted = [str(x).lower() for x in dcfg.get("languages") or []]
+    if not wanted:
+        return True
+    lang = str(item.extra.get("language") or "").split("-")[0].lower()
+    if lang:
+        return lang in wanted
+    latin_targets = {"en", "fr", "es", "pt", "de", "it", "nl", "pl", "tr", "id", "vi"}
+    if set(wanted) <= latin_targets and not is_latin_text(item.title, threshold=0.6):
+        return False
+    return bool(dcfg.get("keep_unknown_language", True))
+
+
 def keep(item: SourceItem, dcfg: Mapping[str, Any], *, now: datetime) -> bool:
     """Live depuis >= N min, ou VOD < 24 h de > N min ; pertinence GTA 6 ; viewers minimum (hors campagne)."""
     min_dur = float(dcfg.get("min_duration_minutes", 45)) * 60
@@ -459,6 +489,11 @@ def keep(item: SourceItem, dcfg: Mapping[str, Any], *, now: datetime) -> bool:
         published = parse_ts(item.published_at)
         if published is None or now - published > timedelta(hours=float(dcfg.get("max_vod_age_hours", 24))):
             return False
+        max_dur = dcfg.get("max_duration_minutes")
+        if max_dur and item.duration > float(max_dur) * 60:
+            return False                      # VOD trop longue : téléchargement et traitement disproportionnés
+    if not language_ok(item, dcfg):
+        return False
     keywords = dcfg.get("keywords") or ["GTA 6"]
     categories = [str(c).lower() for c in item.extra.get("categories") or []]
     on_topic = title_matches(item.title, keywords) or any(
@@ -539,7 +574,8 @@ def discover(cfg: Mapping[str, Any], *, platforms: Sequence[str] | None = None, 
             per_platform[it.platform] = per_platform.get(it.platform, 0) + 1
             selected.append(it)
     sources = [{k: v for k, v in asdict(it).items() if k != "extra"} | {"duration": round(it.duration),
-               "views_per_hour": round(it.views_per_hour, 1)} for it in selected]
+               "views_per_hour": round(it.views_per_hour, 1), "language": it.extra.get("language")}
+               for it in selected]
     out = Path(output) if output else path(cfg, "sources_json")
     write_json(out, {"format": SOURCES_FORMAT, "generated_at": utc_now_iso(), "platforms": platforms,
                      "errors": errors, "count": len(sources), "sources": sources})

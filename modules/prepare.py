@@ -131,7 +131,7 @@ def choose_download_mode(src: Source, setting: str) -> str:
 # Téléchargement (laptop ou notebook)
 # ---------------------------------------------------------------------------
 def download_url(url: str, out_dir: str | Path, video_id: str, *, max_height: int = 1080,
-                 progress: ProgressCallback | None = None) -> Path:
+                 progress: ProgressCallback | None = None, on_phase: Callable[[str], None] | None = None) -> Path:
     """Télécharge une VOD en MP4 (vidéo <= ``max_height`` + audio) avec yt-dlp. Utilisé aussi par le worker."""
     import yt_dlp
 
@@ -148,9 +148,26 @@ def download_url(url: str, out_dir: str | Path, video_id: str, *, max_height: in
         log.info("Déjà téléchargé : %s", existing)
         return existing
 
+    parts = {"n": 0}
+
     def hook(d: dict[str, Any]) -> None:
-        if progress and d.get("status") == "downloading":
-            progress(int(d.get("downloaded_bytes") or 0), int(d.get("total_bytes") or d.get("total_bytes_estimate") or 0))
+        status = d.get("status")
+        if status == "downloading":
+            if parts["n"] == 0:
+                parts["n"] = 1
+                if on_phase:
+                    on_phase("téléchargement (vidéo)")
+            if progress:
+                progress(int(d.get("downloaded_bytes") or 0),
+                         int(d.get("total_bytes") or d.get("total_bytes_estimate") or 0))
+        elif status == "finished":
+            parts["n"] += 1
+            if on_phase:
+                on_phase("téléchargement (audio)" if parts["n"] == 2 else "assemblage vidéo + audio (ffmpeg)")
+
+    def pp_hook(d: dict[str, Any]) -> None:
+        if on_phase and d.get("status") == "started":
+            on_phase("assemblage vidéo + audio (ffmpeg)")
 
     h = int(max_height)
     opts = {
@@ -160,6 +177,7 @@ def download_url(url: str, out_dir: str | Path, video_id: str, *, max_height: in
         "noplaylist": True, "quiet": True, "no_warnings": True, "noprogress": True,
         "retries": 10, "fragment_retries": 10, "concurrent_fragment_downloads": 4,
         "progress_hooks": [hook],
+        "postprocessor_hooks": [pp_hook],
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -221,6 +239,7 @@ def prepare(
     download: str | None = None,
     force: bool = False,
     progress: ProgressCallback | None = None,
+    on_phase: Callable[[str], None] | None = None,
     probe: Callable[[str], dict[str, Any]] = probe_url,
     downloader: Callable[..., Path] = download_url,
 ) -> dict[str, Any]:
@@ -245,7 +264,8 @@ def prepare(
         if src.kind == "url":
             assert src.url
             local_download = downloader(src.url, resolve_path(cfg, pcfg.get("download_dir", "cache/downloads")),
-                                        src.video_id, max_height=int(pcfg.get("max_height", 1080)), progress=progress)
+                                        src.video_id, max_height=int(pcfg.get("max_height", 1080)), progress=progress,
+                                        **({"on_phase": on_phase} if on_phase else {}))
             video_file = local_download
         else:
             assert src.local_path
@@ -255,6 +275,8 @@ def prepare(
         if info is not None and info.size == video_file.stat().st_size:
             log.info("Source déjà présente sur Drive : %s", drive.display(remote))
         else:
+            if on_phase:
+                on_phase("envoi vers Google Drive")
             drive.upload_file(video_file, remote, progress=progress)
         source_drive_path = drive.display(remote)
 

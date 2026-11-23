@@ -41,6 +41,14 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
 fi
 ok "$(ffmpeg -version | head -n1)"
 
+step "Polices (sous-titres dans toutes les écritures)"
+# Montserrat n'a que l'alphabet latin : sans ces polices, le hindi, l'arabe, le russe… s'affichent en carrés.
+# libass bascule automatiquement sur Noto pour chaque caractère absent de Montserrat.
+if ! fc-list 2>/dev/null | grep -qi "NotoSansDevanagari"; then
+  { apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y fonts-noto-core >/dev/null 2>&1; } || warn "fonts-noto-core indisponible : écritures non latines en carrés."
+fi
+fc-list 2>/dev/null | grep -qi "NotoSansDevanagari" && ok "polices Noto installées (devanagari, arabe, cyrillique…)"
+
 step "Paquets Python (ClipGod + extra [cloud])"
 # Bornes minimales seulement : pip garde les versions déjà fournies par Colab (torch, numpy, pandas…).
 python3 -m pip install $PIP_QUIET --upgrade pip >/dev/null

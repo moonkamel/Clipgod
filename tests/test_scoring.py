@@ -82,3 +82,14 @@ def test_build_reason():
     reason = S.build_reason({"audio_loudness_peak": 0.9, "text_hype_keywords": 1.0, "visual_motion": 0.1},
                             S.DEFAULT_WEIGHTS, keywords=["no way", "wtf"])
     assert reason.startswith("mots de hype") and "« no way »" in reason
+
+
+def test_is_latin_text():
+    assert S.is_latin_text("NO WAY bro, c'était énorme !")
+    assert not S.is_latin_text("भाई अरे भाई आखी") and not S.is_latin_text("Что это было")
+    assert S.is_latin_text("💀 123 !!")                      # pas de lettres : considéré latin
+
+
+def test_hooks_never_quote_non_latin_transcript():
+    hooks = S.generate_hooks(transcript="भाई अरे भाई आखी! भाई!", streamer="ShehzadGaming4K", n=3, seed="x")
+    assert len(hooks) == 3 and all(S.is_latin_text(h) for h in hooks)

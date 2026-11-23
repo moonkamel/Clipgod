@@ -366,6 +366,17 @@ def pick_quote(text: str, keywords: Sequence[str] = (), *, max_words: int = 6, m
     return quote.upper() if candidates[0][0] == 0 and len(quote) <= 30 else quote
 
 
+def is_latin_text(text: str, threshold: float = 0.9) -> bool:
+    """True si les lettres du texte sont (presque) toutes latines (accents compris)."""
+    import unicodedata
+
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return True
+    latin = sum("LATIN" in unicodedata.name(c, "") for c in letters)
+    return latin / len(letters) >= threshold
+
+
 def generate_hooks(
     *,
     transcript: str = "",
@@ -382,6 +393,8 @@ def generate_hooks(
 
     Diversité voulue pour l'A/B test : (1) une citation du transcript, (2) un template de la catégorie
     thématique détectée, (3) un template lié au signal dominant (most replayed, action, audio), puis génériques.
+    Une citation dans une autre écriture que l'alphabet latin (hindi, arabe, russe…) n'est jamais utilisée :
+    les hooks visent une audience anglophone ou francophone.
     """
     templates = HOOK_TEMPLATES.get(lang, HOOK_TEMPLATES["en"])
     seed_int = int(hashlib.sha256(str(seed).encode()).hexdigest()[:12], 16)
@@ -406,6 +419,8 @@ def generate_hooks(
                 return
 
     quote = pick_quote(transcript, keywords)
+    if quote and not is_latin_text(quote):
+        quote = None
     if quote:
         options = list(templates["quote"])
         rng.shuffle(options)

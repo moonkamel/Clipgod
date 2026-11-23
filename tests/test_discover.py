@@ -242,3 +242,27 @@ def test_best_source_prefers_vod(cfg, monkeypatch):
     monkeypatch.setattr(D, "utc_now", lambda: NOW)
     cfg["discover"]["platforms"] = ["twitch"]
     assert D.best_source(cfg) == "https://www.twitch.tv/videos/7"
+
+
+def _item(title, lang=None, duration=4 * 3600, status="vod"):
+    return D.SourceItem("https://x/" + title, title, 9000, duration, "s", "twitch", status,
+                        iso(NOW - timedelta(hours=2)), 4000.0, extra={"language": lang} if lang else {})
+
+
+def test_language_filter_and_max_duration():
+    dcfg = {"languages": ["en", "fr"], "keywords": ["GTA 6"], "max_duration_minutes": 300, "min_viewers": 0}
+    assert D.keep(_item("GTA 6 heist", "en"), dcfg, now=NOW)
+    assert D.keep(_item("GTA 6 braquage", "fr"), dcfg, now=NOW)
+    assert not D.keep(_item("GTA 6 | DAY 5 | GABBAR SINGH IS BACK", "hi"), dcfg, now=NOW)   # langue déclarée
+    assert not D.keep(_item("GTA 6 | قراند ثفت أوتو مباشر بث"), dcfg, now=NOW)              # écriture non latine
+    assert D.keep(_item("GTA 6 first day"), dcfg, now=NOW)                                   # langue inconnue
+    assert not D.keep(_item("GTA 6 marathon", "en", duration=10 * 3600), dcfg, now=NOW)       # > 5 h
+    assert D.keep(_item("GTA 6 live", "en", duration=10 * 3600, status="live"), dcfg, now=NOW)  # live : pas de max
+    assert D.keep(_item("GTA 6 | DAY 5", "hi"), {**dcfg, "languages": []}, now=NOW)
+
+
+def test_youtube_language_and_relevance_param(cfg):
+    assert D._yt_language({"defaultAudioLanguage": "en-US"}) == "en" and D._yt_language({}) is None
+    yt = FakeYouTube()
+    D.discover_youtube(cfg, D.CampaignTargets(), now=NOW, service=yt)
+    assert all(kw.get("relevanceLanguage") == "en" for name, kw in yt.calls if name == "search")
