@@ -270,6 +270,12 @@ publish:
     endpoint: "https://api.upload-post.com/api/upload"   # à vérifier dans la doc Upload-Post
     user_env: UPLOAD_POST_USER      # nom du profil Upload-Post (variable d'environnement)
     analytics_endpoint: null        # ex. "https://api.upload-post.com/api/analytics/{request_id}" (à vérifier)
+  manual:                           # clipgod tiktok : publication manuelle assistée (gratuite, sans API)
+    max_per_day: 3                  # compte neuf : 1-3/jour la 1re semaine, puis augmenter
+    horizon_days: 10                # TikTok Studio programme jusqu'à 10 jours à l'avance
+    hashtags:
+      tiktok: ["#gta6", "#gtavi", "#gta", "#gaming", "#fyp"]
+      instagram_reels: ["#gta6", "#gtavi", "#gta", "#gaming", "#reels"]
   env:
     upload_post_api_key: UPLOAD_POST_API_KEY
     youtube_client_secrets: YOUTUBE_CLIENT_SECRETS

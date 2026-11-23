@@ -141,10 +141,12 @@ Vérifiez :
 
 ```bash
 clipgod --help
-pytest -q
 ```
 
-`clipgod --help` liste les commandes, et `pytest` doit afficher uniquement des points (tous les tests passent).
+`clipgod --help` doit lister les commandes.
+
+> Ne lancez pas `pytest` sur le laptop : une partie des tests a besoin des dépendances GPU (faster-whisper,
+> OpenCV…), qui ne sont installées que sur Colab / Kaggle. Les tests tournent automatiquement sur GitHub.
 
 > **À chaque nouvelle session de terminal**, réactivez l'environnement (`.venv\Scripts\Activate.ps1` ou
 > `source .venv/bin/activate`) avant d'utiliser `clipgod`.
@@ -305,8 +307,34 @@ Utile quand votre quota Colab est épuisé.
 
 ---
 
-## 11. Option : TikTok et Instagram (Upload-Post)
+## 11. Option : TikTok et Instagram
 
+### Gratuit : publication manuelle assistée (`clipgod tiktok`)
+
+Aucun compte ni clé d'API : vous déposez vous-même les clips dans
+[TikTok Studio](https://www.tiktok.com/tiktokstudio/upload), qui programme jusqu'à 10 jours à l'avance.
+
+```bash
+clipgod sync              # récupère les clips depuis Drive
+clipgod tiktok --plan     # aperçu des prochains posts et de leurs légendes
+clipgod tiktok            # séance de publication (3 clips par défaut, -n 5 pour 5)
+clipgod tiktok --choose   # liste tous les clips : « v3 » pour regarder le 3, puis « 1,3,5-7 » pour choisir
+```
+
+Pour chaque clip, ClipGod :
+
+1. copie la légende (hook, crédit du streamer, hashtags et mentions de la campagne) dans le presse-papiers ;
+2. ouvre l'explorateur sur le clip, déjà sélectionné : glissez-le dans TikTok Studio ;
+3. indique le créneau de forte audience à saisir dans « Programmer » ;
+4. attend votre confirmation. Collez le lien de la vidéo TikTok si vous l'avez : il servira à `learn`.
+
+Un clip confirmé n'est jamais reproposé, et une seule variante de hook par moment part sur TikTok.
+Réglages : `publish.manual` dans `config.yaml` (`max_per_day: 3` par défaut, hashtags par plateforme).
+Pour Instagram : `clipgod tiktok --platform instagram_reels`.
+
+### Payant : envoi automatique (Upload-Post)
+
+La connexion TikTok n'est pas incluse dans l'offre gratuite d'Upload-Post.
 Sans cette étape, `publish` utilise uniquement YouTube Shorts.
 
 1. Créez un compte sur [upload-post.com](https://upload-post.com), connectez-y vos comptes TikTok / Instagram,

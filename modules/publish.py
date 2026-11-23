@@ -352,7 +352,8 @@ class PublishReport:
     errors: list[tuple[str, str]] = field(default_factory=list)
 
 
-def load_candidates(cfg: Mapping[str, Any], state: StateStore, clip: str | Path | None) -> list[ClipInfo]:
+def load_candidates(cfg: Mapping[str, Any], state: StateStore, clip: str | Path | None,
+                    statuses: Sequence[str] = ("synced", "validated")) -> list[ClipInfo]:
     if clip is not None:
         p = Path(clip)
         if not p.is_file():
@@ -360,7 +361,7 @@ def load_candidates(cfg: Mapping[str, Any], state: StateStore, clip: str | Path 
         return [ClipInfo(p.stem, p, read_json(p.with_suffix(".json"), default={}) or {})]
     out = []
     for clip_id, entry in state.clips().items():
-        if entry.get("status") not in ("synced", "validated"):
+        if entry.get("status") not in statuses:
             continue
         p = Path(entry.get("path") or "")
         if not p.is_file():
@@ -373,6 +374,40 @@ def load_candidates(cfg: Mapping[str, Any], state: StateStore, clip: str | Path 
     return out
 
 
+def validated_candidates(cfg: Mapping[str, Any], state: StateStore, *, clip: str | Path | None = None,
+                         skip_validation: bool = False, record: bool = True,
+                         rejected: list[tuple[str, list[str]]] | None = None,
+                         statuses: Sequence[str] = ("synced", "validated")) -> list[ClipInfo]:
+    """Clips candidats avec les règles de leur campagne, filtrés par ``monetize.validate_clip``.
+
+    ``record`` : enregistre le verdict dans ``data/state.json`` / ``data/rejected.json``.
+    Les refus sont ajoutés à ``rejected`` (clip_id, raisons) si la liste est fournie.
+    """
+    candidates = load_candidates(cfg, state, clip, statuses)
+    campaigns = _campaigns(cfg) if get(cfg, "publish.use_campaign_rules", True) else []
+    for c in candidates:
+        campaign = match_campaign(campaigns, slug=c.meta.get("campaign"), streamer=c.meta.get("streamer"))
+        c.rules = rules_for(cfg, campaign)
+        if campaign:
+            c.meta["campaign"] = campaign.slug
+    if skip_validation:
+        return candidates
+    valid = []
+    for c in candidates:
+        result = validate_clip({"clip_id": c.clip_id, **c.meta}, c.rules or Rules.from_config(cfg), c.path)
+        if result.ok:
+            valid.append(c)
+            if record and (state.get_clip(c.clip_id) or {}).get("status") in (None, "synced"):
+                state.upsert_clip(c.clip_id, status="validated")
+        else:
+            if rejected is not None:
+                rejected.append((c.clip_id, result.reasons))
+            if record:
+                record_rejection(cfg, result, campaign=c.meta.get("campaign"))
+                state.upsert_clip(c.clip_id, status="rejected", rejected_reasons=result.reasons)
+    return valid
+
+
 def publish(cfg: Mapping[str, Any], *, clip: str | Path | None = None, platforms: Sequence[str] | None = None,
             test: bool = True, schedule: bool = True, skip_validation: bool = False, dry_run: bool = False,
             backends: Mapping[str, Backend] | None = None, now: datetime | None = None) -> PublishReport:
@@ -382,27 +417,8 @@ def publish(cfg: Mapping[str, Any], *, clip: str | Path | None = None, platforms
     tz = ZoneInfo(str(get(cfg, "project.timezone", "Europe/Paris")))
     now = now or utc_now()
 
-    candidates = load_candidates(cfg, state, clip)
-    campaigns = _campaigns(cfg) if pcfg.get("use_campaign_rules", True) else []
-    for c in candidates:
-        campaign = match_campaign(campaigns, slug=c.meta.get("campaign"), streamer=c.meta.get("streamer"))
-        c.rules = rules_for(cfg, campaign)
-        if campaign:
-            c.meta["campaign"] = campaign.slug
-    if not skip_validation:
-        valid = []
-        for c in candidates:
-            result = validate_clip({"clip_id": c.clip_id, **c.meta}, c.rules or Rules.from_config(cfg), c.path)
-            if result.ok:
-                valid.append(c)
-                if not dry_run:
-                    state.upsert_clip(c.clip_id, status="validated")
-            else:
-                report.rejected.append((c.clip_id, result.reasons))
-                if not dry_run:
-                    record_rejection(cfg, result, campaign=c.meta.get("campaign"))
-                    state.upsert_clip(c.clip_id, status="rejected", rejected_reasons=result.reasons)
-        candidates = valid
+    candidates = validated_candidates(cfg, state, clip=clip, skip_validation=skip_validation, record=not dry_run,
+                                      rejected=report.rejected)
 
     wanted = list(platforms or pcfg.get("platforms") or ["youtube_shorts"])
     if test:
