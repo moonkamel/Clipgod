@@ -190,6 +190,28 @@ def _filter_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, 
     return {k: v for k, v in kwargs.items() if k in params}
 
 
+def load_wav_16k(path: str) -> np.ndarray:
+    """WAV PCM 16 bits (produit par :func:`extract_audio`) -> float32 mono dans [-1, 1].
+
+    On passe ce tableau à faster-whisper au lieu du chemin du fichier : faster-whisper décoderait sinon
+    l'audio avec PyAV, dont certaines versions sont incompatibles (``av.open(... metadata_errors=...)``
+    refusé par PyAV >= 15). Le module ``wave`` de la bibliothèque standard suffit pour notre WAV.
+    """
+    import wave
+
+    with contextlib.closing(wave.open(str(path), "rb")) as w:
+        if w.getsampwidth() != 2:
+            raise ScanError(f"WAV inattendu ({8 * w.getsampwidth()} bits) : 16 bits requis.")
+        rate, channels = w.getframerate(), w.getnchannels()
+        raw = w.readframes(w.getnframes())
+    audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    if rate != 16000:
+        raise ScanError(f"WAV à {rate} Hz : 16 000 Hz requis par whisper.")
+    return audio
+
+
 def _run_whisper(model: Any, audio_path: str, wcfg: Mapping[str, Any]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "language": wcfg.get("language") or None,
@@ -198,15 +220,16 @@ def _run_whisper(model: Any, audio_path: str, wcfg: Mapping[str, Any]) -> dict[s
         "word_timestamps": True,
         "condition_on_previous_text": False,  # évite les boucles d'hallucination sur les longs streams
     }
+    audio = load_wav_16k(audio_path)          # tableau numpy : pas de décodage PyAV dans faster-whisper
     batch_size = int(wcfg.get("batch_size", 0) or 0)
     if batch_size > 0:
         from faster_whisper import BatchedInferencePipeline
 
         pipeline = BatchedInferencePipeline(model=model)
         kwargs["batch_size"] = batch_size
-        segments, info = pipeline.transcribe(audio_path, **_filter_kwargs(pipeline.transcribe, kwargs))
+        segments, info = pipeline.transcribe(audio, **_filter_kwargs(pipeline.transcribe, kwargs))
     else:
-        segments, info = model.transcribe(audio_path, **_filter_kwargs(model.transcribe, kwargs))
+        segments, info = model.transcribe(audio, **_filter_kwargs(model.transcribe, kwargs))
 
     total = float(getattr(info, "duration", 0.0) or 0.0)
     next_report = 0.1
