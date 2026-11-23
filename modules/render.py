@@ -521,8 +521,44 @@ def _wav_duration(path: Path) -> float:
 # ===========================================================================
 # Construction du graphe ffmpeg
 # ===========================================================================
-def video_filter(layout: Layout, *, src_w: int, src_h: int, rcfg: Mapping[str, Any]) -> str:
-    """Graphe vidéo (entrée [0:v], sortie [vl]) : layout 1080x1920 sans texte."""
+def detect_letterbox(frames: Sequence[tuple[float, np.ndarray]], src_h: int, *, min_ratio: float = 0.04,
+                     min_share: float = 0.8) -> tuple[int, int] | None:
+    """Bandes noires (cinématiques « cinéma ») présentes sur >= ``min_share`` des images.
+
+    Retourne ``(y, h)`` de la zone utile en pixels source (pairs), ou None s'il n'y a rien à retirer.
+    """
+    from modules.scan import letterbox_bars
+
+    tops, bottoms = [], []
+    for _, frame in frames:
+        gray = frame.mean(axis=2) if frame.ndim == 3 else frame
+        top, bottom = letterbox_bars(gray)
+        if top >= gray.shape[0]:                      # image noire (fondu) : ignorée
+            continue
+        tops.append(top / gray.shape[0])
+        bottoms.append(bottom / gray.shape[0])
+    if len(tops) < 2:
+        return None
+    # Quantile bas : une bande doit être là sur (presque) toutes les images pour être retirée.
+    q = 100 * (1 - min_share)
+    top_r, bot_r = float(np.percentile(tops, q)), float(np.percentile(bottoms, q))
+    if top_r < min_ratio or bot_r < min_ratio:
+        return None
+    y = int(top_r * src_h) // 2 * 2 + 2                   # +2 px : pas de liseré sombre
+    h = (src_h - y - int(bot_r * src_h) - 2) // 2 * 2
+    return (y, h) if h > src_h * 0.5 else None
+
+
+def video_filter(layout: Layout, *, src_w: int, src_h: int, rcfg: Mapping[str, Any],
+                 letterbox: tuple[int, int] | None = None) -> str:
+    """Graphe vidéo (entrée [0:v], sortie [vl]) : layout 1080x1920 sans texte.
+
+    ``letterbox`` (y, h) : zone utile d'une image à bandes noires, recadrée avant le format vertical.
+    """
+    if letterbox is not None:
+        y, h = letterbox
+        inner = video_filter(layout, src_w=src_w, src_h=h, rcfg=rcfg)
+        return f"[0:v]crop={src_w}:{h}:0:{y}[lbx];" + inner.replace("[0:v]", "[lbx]", 1)
     W, H = int(rcfg.get("width", 1080)), int(rcfg.get("height", 1920))
     lcfg = rcfg.get("layout") or {}
     fps = int(rcfg.get("fps", 30))
@@ -621,9 +657,12 @@ def render_moment(moment: Mapping[str, Any], video_path: str, output_dir: Path, 
     regions = lcfg.get("facecam_regions") or {}
     manual = regions.get(str(streamer or "").lstrip("@").lower()) if streamer else None
     samples: list[FaceSample] = []
-    if detector is not None and not manual and lcfg.get("mode", "auto") != "center":
+    frames: list[tuple[float, np.ndarray]] = []
+    want_faces = detector is not None and not manual and lcfg.get("mode", "auto") != "center"
+    if want_faces or rcfg.get("remove_letterbox", True):
         frames = sample_frames(video_path, start, duration, fps=float(lcfg.get("analysis_fps", 2)),
                                src_w=src_w, src_h=src_h)
+    if want_faces:
         samples = analyze_faces(frames, detector)
     out_w, out_h = int(rcfg.get("width", 1080)), int(rcfg.get("height", 1920))
     panel_h = out_h - int(out_h * float(lcfg.get("gameplay_ratio", 0.70))) // 2 * 2
@@ -641,7 +680,12 @@ def render_moment(moment: Mapping[str, Any], video_path: str, output_dir: Path, 
         log.info("hook déplacé à %.0f %% de la hauteur pour ne pas couvrir le visage", hook_y * 100)
     text_cfg = {**rcfg, "hook": {**hk, "y_position_ratio": hook_y}}
 
-    vfilter = video_filter(layout, src_w=src_w, src_h=src_h, rcfg=rcfg)
+    # Bandes noires retirées seulement en plein écran : avec facecam, l'incrustation peut chevaucher la bande.
+    letterbox = detect_letterbox(frames, src_h) if rcfg.get("remove_letterbox", True) and layout.kind == "center" \
+        else None
+    if letterbox:
+        log.info("bandes noires retirées : zone utile %dpx sur %dpx de haut", letterbox[1], src_h)
+    vfilter = video_filter(layout, src_w=src_w, src_h=src_h, rcfg=rcfg, letterbox=letterbox)
     target = float(rcfg.get("loudness_lufs", -14))
     measured = measure_loudness(video_path, start, duration, target) if src.get("has_audio") else None
     voiceover = bool((rcfg.get("voiceover") or {}).get("enabled"))

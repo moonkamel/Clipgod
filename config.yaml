@@ -145,6 +145,16 @@ scan:
     step_seconds: 5                 # pas de glissement
   clip_min_seconds: null            # défaut : max(monetize min, 8)
   clip_max_seconds: null            # défaut : monetize max - 0,5 (strictement < 30 s)
+  duration:                         # durée de chaque clip
+    mode: adaptive                  # adaptive = ajustée à la séquence (mise en place + action + réaction) | window
+    min_seconds: 12                 # plancher (le plafond reste clip_max_seconds)
+    setup: 3.0                      # secondes gardées avant le début de l'action
+    tail: 1.5                       # secondes gardées après la retombée (réaction)
+    rel_threshold: 0.35             # part du pic au-dessus de laquelle la séquence est « active »
+    quiet: 2                        # secondes calmes consécutives qui terminent la séquence
+  cutscene:                         # cinématiques (bandes noires) : pas de réaction du streamer, droits Rockstar
+    enabled: true
+    penalty: 0.7                    # score × (1 − 0,7 × part de cinématique dans la fenêtre)
   top_k_moments: 3
   min_score: 40                     # sous ce score, un moment n'est pas rendu (reste candidat)
   max_candidates: 5                 # moments supplémentaires (sans hooks) gardés pour revue manuelle
@@ -194,6 +204,7 @@ render:
   loudness_lufs: -14
   ab_variants: true                 # un clip par hook (A/B test) ; false = seulement le 1er hook
   cache_dir: null                   # modèles/polices téléchargés ; défaut ~/.cache/clipgod
+  remove_letterbox: true            # retire les bandes noires des cinématiques avant le recadrage vertical
   layout:
     mode: auto                      # auto (facecam détectée ?) | facecam | center
     facecam_detector: yunet

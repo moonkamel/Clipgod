@@ -505,8 +505,29 @@ def _hwaccel_args(choice: str | None) -> list[str]:
     return ["-hwaccel", str(choice)]
 
 
+def letterbox_bars(gray: np.ndarray, *, dark: float = 18.0, peak: float = 45.0) -> tuple[int, int]:
+    """Hauteur (lignes) des bandes noires en haut et en bas d'une image en niveaux de gris."""
+    means, maxs = gray.mean(axis=1), gray.max(axis=1)
+    black = (means < dark) & (maxs < peak)
+    h = gray.shape[0]
+    top = int(np.argmin(black)) if not black.all() else h
+    bottom = int(np.argmin(black[::-1])) if not black.all() else h
+    return top, bottom
+
+
+def is_letterboxed(gray: np.ndarray, *, min_ratio: float = 0.06) -> bool:
+    """Image « cinéma » : bandes noires en haut ET en bas, image visible au milieu (cinématique de jeu)."""
+    h = gray.shape[0]
+    top, bottom = letterbox_bars(gray)
+    if top >= h:                                   # image entièrement noire : fondu, pas une cinématique
+        return False
+    middle = gray[top:h - bottom]
+    return top >= min_ratio * h and bottom >= min_ratio * h and middle.size > 0 and float(middle.mean()) > 20.0
+
+
 def visual_signals(video_path: str, n_bins: int, vcfg: Mapping[str, Any]) -> dict[str, np.ndarray]:
-    """Mouvement (flux optique Farneback) et coupes de scène (distance d'histogrammes) par seconde."""
+    """Mouvement (flux optique Farneback), coupes de scène (distance d'histogrammes) et part d'images
+    « cinéma » à bandes noires (cinématiques) par seconde."""
     import cv2
 
     fps = float(vcfg.get("sample_fps", 2))
@@ -518,6 +539,8 @@ def visual_signals(video_path: str, n_bins: int, vcfg: Mapping[str, Any]) -> dic
     def run(hw: list[str]) -> dict[str, np.ndarray]:
         motion = np.zeros(n_bins)
         scenes = np.zeros(n_bins)
+        boxed = np.zeros(n_bins)
+        counts = np.zeros(n_bins)
         cmd = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", *hw, "-i", str(video_path),
                "-an", "-sn", "-vf", f"fps={fps},scale={width}:{height}:flags=area,format=gray",
                "-f", "rawvideo", "pipe:1"]
@@ -538,6 +561,8 @@ def visual_signals(video_path: str, n_bins: int, vcfg: Mapping[str, Any]) -> dic
                 hist = cv2.calcHist([cur], [0], None, [32], [0, 256])
                 cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)
                 b = min(n_bins - 1, int(idx / fps))
+                counts[b] += 1
+                boxed[b] += is_letterboxed(cur)
                 if prev is not None:
                     dist = cv2.compareHist(prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA)
                     if dist > threshold:
@@ -554,7 +579,8 @@ def visual_signals(video_path: str, n_bins: int, vcfg: Mapping[str, Any]) -> dic
                 raise ScanError(f"ffmpeg (frames) : {err.read().decode(errors='replace').strip()[:400]}")
         if idx == 0:
             raise ScanError("Aucune frame décodée.")
-        return {"motion": motion, "scenes": scenes}
+        letterbox = np.divide(boxed, counts, out=np.zeros(n_bins), where=counts > 0)
+        return {"motion": motion, "scenes": scenes, "letterbox": letterbox}
 
     hw = _hwaccel_args(vcfg.get("hwaccel", "auto"))
     try:
@@ -747,18 +773,114 @@ def refine_bounds(start: float, end: float, peak: float, words: Sequence[Mapping
     return round(start, 2), round(end, 2)
 
 
+def adaptive_bounds(curve: np.ndarray, peak: float, words: Sequence[Mapping[str, Any]], *, clip_min: float,
+                    clip_max: float, duration: float, setup: float = 3.0, tail: float = 1.5,
+                    rel_threshold: float = 0.35, quiet: int = 2, context: int = 60) -> tuple[float, float]:
+    """Bornes « optimales » d'un moment autour de son pic, au lieu d'une durée fixe.
+
+    1. séquence active : on part du pic et on s'étend tant que l'intensité reste au-dessus de
+       ``base + rel_threshold × (pic − base)`` (base = médiane sur ±``context`` s) ; ``quiet`` secondes
+       sous le seuil marquent la fin de la séquence ;
+    2. contexte : ``setup`` s avant (la mise en place) et ``tail`` s après (la réaction qui retombe) ;
+    3. bornes [clip_min, clip_max], pic toujours inclus ;
+    4. début calé sur une prise de parole, fin calée sur une fin de phrase (pause >= 0,4 s), jamais en plein mot.
+    """
+    n = int(curve.size)
+    if n == 0:
+        return refine_bounds(max(0.0, peak - 0.35 * clip_max), min(duration, peak + 0.65 * clip_max), peak, words,
+                             clip_min=clip_min, clip_max=clip_max, duration=duration)
+    c = _moving_average(np.asarray(curve, dtype=np.float64), 3)
+    p = min(n - 1, max(0, int(peak)))
+    base = float(np.median(c[max(0, p - context):min(n, p + context + 1)]))
+    top = float(c[max(0, p - 2):min(n, p + 3)].max())
+    if top <= base + 1e-9:                                   # pas de pic net : fenêtre classique
+        return refine_bounds(max(0.0, peak - 0.35 * clip_max), min(duration, peak + 0.65 * clip_max), peak, words,
+                             clip_min=clip_min, clip_max=clip_max, duration=duration)
+    thr = base + rel_threshold * (top - base)
+
+    first = j = p
+    while j > 0 and p - (j - 1) <= 0.6 * clip_max:
+        j -= 1
+        if c[j] >= thr:
+            first = j
+        elif first - j >= quiet:
+            break
+    last = j = p
+    while j < n - 1 and (j + 1) - p <= clip_max:
+        j += 1
+        if c[j] >= thr:
+            last = j
+        elif j - last >= quiet:
+            break
+
+    start, end = max(0.0, first - setup), min(duration, last + 1.0 + tail)
+    if end - start > clip_max:                                # trop long : on garde le pic, plutôt vers le début
+        start = max(start, min(peak - 0.4 * clip_max, end - clip_max))
+        end = min(end, start + clip_max)
+    if end - start < clip_min:                                # trop court : on élargit (plus après qu'avant)
+        missing = clip_min - (end - start)
+        start, end = max(0.0, start - 0.4 * missing), min(duration, end + 0.6 * missing)
+        if end - start < clip_min:
+            start, end = max(0.0, end - clip_min), min(duration, max(end, start + clip_min))
+
+    # Début : un mot précédé d'un silence (>= 0,3 s) — le plus long silence l'emporte, à distance égale —
+    # sans repousser le pic hors du clip.
+    best, best_d = None, -9e9
+    for i, w in enumerate(words):
+        if w["start"] < start - 1.5:
+            continue
+        if w["start"] > start + 1.0:
+            break
+        gap = w["start"] - (words[i - 1]["end"] if i > 0 else 0.0)
+        cand = max(0.0, w["start"] - 0.15)
+        quality = gap - 0.5 * abs(cand - start)
+        if gap >= 0.3 and cand < peak - 1.0 and end - cand <= clip_max and quality > best_d:
+            best, best_d = cand, quality
+    if best is not None:
+        start = best
+
+    # Fin : une fin de phrase (pause >= 0,4 s ensuite) proche de la fin visée, la plus longue pause l'emporte.
+    best, best_d = None, -9e9
+    for i, w in enumerate(words):
+        if w["end"] < end - 1.5:
+            continue
+        if w["end"] > end + 2.5:
+            break
+        nxt = words[i + 1]["start"] if i + 1 < len(words) else duration
+        cand = min(duration, w["end"] + 0.25)
+        quality = min(nxt - w["end"], 3.0) - 0.5 * abs(cand - end)
+        if nxt - w["end"] >= 0.4 and clip_min <= cand - start <= clip_max and cand > peak + 0.5 \
+                and quality > best_d:
+            best, best_d = cand, quality
+    if best is not None:
+        end = best
+    end = min(end, start + clip_max, duration)
+    for w in words:
+        if w["start"] < end < w["end"]:
+            end = min(duration, w["end"] + 0.1) if w["end"] + 0.1 - start <= clip_max else w["start"]
+            break
+    return round(start, 2), round(end, 2)
+
+
 def select_moments(starts: np.ndarray, lens: np.ndarray, scores: np.ndarray, tl: Timeline,
                    weights: Mapping[str, float], *, count: int, min_gap: float, clip_min: float,
-                   clip_max: float) -> list[dict[str, Any]]:
-    """Sélection gloutonne par score décroissant, sans chevauchement (écart minimal ``min_gap``)."""
+                   clip_max: float, adaptive: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Sélection gloutonne par score décroissant, sans chevauchement (écart minimal ``min_gap``).
+
+    ``adaptive`` (paramètres de :func:`adaptive_bounds`) : durée ajustée à la séquence au lieu de la fenêtre.
+    """
     curve = intensity_curve(tl, weights)
     chosen: list[dict[str, Any]] = []
     for i in np.argsort(-scores, kind="stable"):
         s, L = int(starts[i]), int(lens[i])
         segment = curve[s:s + L]
         peak = float(s + (int(np.argmax(segment)) if segment.size else 0)) + 0.5
-        a, b = refine_bounds(float(s), float(s + L), peak, tl.words, clip_min=clip_min, clip_max=clip_max,
-                             duration=tl.duration)
+        if adaptive is not None:
+            a, b = adaptive_bounds(curve, peak, tl.words, clip_min=clip_min, clip_max=clip_max,
+                                   duration=tl.duration, **adaptive)
+        else:
+            a, b = refine_bounds(float(s), float(s + L), peak, tl.words, clip_min=clip_min, clip_max=clip_max,
+                                 duration=tl.duration)
         if any(a < c["end"] + min_gap and b > c["start"] - min_gap for c in chosen):
             continue
         chosen.append({"window": i, "start": a, "end": b, "peak": round(peak, 2), "score": float(scores[i])})
@@ -912,16 +1034,31 @@ def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
         if X.shape[0] == 0:
             raise ScanError("Vidéo trop courte pour être découpée.")
         scores = scorer.score(X, FEATURES, tl.available)
+        ccfg = scfg.get("cutscene") or {}
+        letterbox = None
+        if visual is not None and "letterbox" in visual and ccfg.get("enabled", True):
+            letterbox = np.pad(np.asarray(visual["letterbox"], dtype=np.float64)[:tl.n],
+                               (0, max(0, tl.n - len(visual["letterbox"]))))
+            csum = np.concatenate([[0.0], np.cumsum(letterbox)])
+            share = (csum[np.minimum(starts + lens, tl.n)] - csum[starts]) / np.maximum(lens, 1)
+            scores = scores * (1.0 - float(ccfg.get("penalty", 0.7)) * share)
+            if float(letterbox.mean()) > 0.05:
+                log.info("cinématiques (bandes noires) : %.0f %% de la vidéo, déclassées", 100 * letterbox.mean())
 
         rules = (config.get("monetize") or {}).get("rules_default") or {}
         clip_max = float(scfg.get("clip_max_seconds") or float(rules.get("max_duration_seconds", 30)) - 0.5)
         clip_min = float(scfg.get("clip_min_seconds") or max(float(rules.get("min_duration_seconds", 7)), 8.0))
+        dcfg = scfg.get("duration") or {}
+        adaptive = None
+        if dcfg.get("mode", "adaptive") == "adaptive":
+            clip_min = max(clip_min, float(dcfg.get("min_seconds", 12)))
+            adaptive = {k: dcfg[k] for k in ("setup", "tail", "rel_threshold", "quiet") if k in dcfg}
         top_k = int(scfg.get("top_k_moments", 3))
         picked = select_moments(
             starts, lens, scores, tl, weights,
             count=top_k + int(scfg.get("max_candidates", 5)),
             min_gap=float(scfg.get("min_gap_between_moments_seconds", 30)),
-            clip_min=clip_min, clip_max=min(clip_max, float(wmax)),
+            clip_min=clip_min, clip_max=min(clip_max, float(wmax)), adaptive=adaptive,
         )
 
         # -- moments + hooks -------------------------------------------------
@@ -939,6 +1076,8 @@ def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
                 "idx": rank, "rank": rank + 1, "video_id": video_id, "streamer": streamer,
                 "start": a, "end": b, "duration": round(b - a, 2), "peak": p["peak"],
                 "score": round(p["score"], 1),
+                "cutscene": round(float(letterbox[int(a):max(int(a) + 1, int(b))].mean()), 2)
+                if letterbox is not None else None,
                 "hooks": [],
                 "reason": build_reason({f: signals[f] for f in tl.available}, weights, keywords=keywords,
                                        lang="fr"),

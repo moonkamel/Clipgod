@@ -315,3 +315,89 @@ def test_transcribe_chunks_oom_fallback(monkeypatch, tmp_path):
     ChunkModel.calls, ChunkModel.fail_at, ChunkModel.oom_names = [], None, ("large-v3",)
     res = M.transcribe(wav, {"model": "auto", "chunk_minutes": 1, "batch_size": 0})
     assert res["model"] == "medium" and len(res["segments"]) == 2
+
+
+# ---------------------------------------------------------------- cinématiques & durée adaptative
+def _frame(top=0, bottom=0, h=90, w=160, value=120):
+    img = np.full((h, w), value, np.uint8)
+    img[:top] = 0
+    if bottom:
+        img[h - bottom:] = 0
+    return img
+
+
+def test_letterbox_detection():
+    assert M.letterbox_bars(_frame(11, 11)) == (11, 11)
+    assert M.is_letterboxed(_frame(11, 11))                       # 2.39:1 dans du 16:9
+    assert not M.is_letterboxed(_frame())                         # gameplay plein écran
+    assert not M.is_letterboxed(_frame(11, 0))                    # une seule bande (HUD sombre…)
+    assert not M.is_letterboxed(np.zeros((90, 160), np.uint8))    # fondu au noir
+
+
+def _words(*spans):
+    return [{"start": a, "end": b, "word": f"w{i}"} for i, (a, b) in enumerate(spans)]
+
+
+def test_adaptive_bounds_fits_the_sequence():
+    curve = np.zeros(300)
+    curve[100:107] = 5.0                                          # action courte (7 s)
+    a, b = M.adaptive_bounds(curve, 103.5, [], clip_min=12, clip_max=29.5, duration=300)
+    assert a <= 100 - 2 and b >= 107 and 12 <= b - a < 20         # mise en place + action + réaction, pas 30 s
+
+    curve = np.zeros(300)
+    curve[100:160] = 5.0                                          # séquence longue (60 s) : plafonnée
+    a, b = M.adaptive_bounds(curve, 110.5, [], clip_min=12, clip_max=29.5, duration=300)
+    assert b - a <= 29.5 and a <= 110.5 <= b
+
+
+def test_adaptive_bounds_snaps_to_sentences():
+    curve = np.zeros(200)
+    curve[50:58] = 4.0
+    # phrase qui commence à 46.2 (après un silence) et se termine à 60.4 (pause ensuite)
+    words = _words((40.0, 40.5), (46.2, 46.6), (47.0, 59.0), (59.1, 60.4), (62.0, 62.5))
+    a, b = M.adaptive_bounds(curve, 54.5, words, clip_min=12, clip_max=29.5, duration=200)
+    assert a == pytest.approx(46.05)
+    assert b == pytest.approx(60.65)
+    assert not any(w["start"] < b < w["end"] for w in words)
+
+
+def test_select_moments_adaptive_gives_varied_durations():
+    tl = M.build_timeline(300.0, transcript=None, loudness_db=None,
+                          visual={"motion": np.r_[np.zeros(50), np.full(6, 9.0), np.zeros(144), np.full(25, 9.0),
+                                                  np.zeros(75)],
+                                  "scenes": np.zeros(300)},
+                          replayed=None, hype_keywords=[])
+    starts, lens, X = M.window_features(tl, [15, 20, 25, 30], 5)
+    scores = X[:, M.FEATURES.index("visual_motion")] * 100
+    picked = M.select_moments(starts, lens, scores, tl, {"visual_motion": 1.0}, count=2, min_gap=10,
+                              clip_min=12, clip_max=29.5, adaptive={})
+    durations = sorted(p["end"] - p["start"] for p in picked)
+    assert len(picked) == 2 and durations[0] < durations[1] <= 29.5
+
+
+@needs_media
+def test_scan_penalizes_cutscenes(project, tmp_path):
+    """Deux pics identiques : l'un en plein écran, l'autre avec bandes noires (cinématique)."""
+    out = tmp_path / "cut.mp4"
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=gray:s=320x180:r=15:d=120",
+        "-f", "lavfi", "-i", "testsrc2=s=320x180:r=15:d=120",
+        "-f", "lavfi", "-i", "aevalsrc='if(between(t,21,26)+between(t,81,86),0.8,0.01)*sin(2*PI*440*t)':d=120:s=16000",
+        "-filter_complex",
+        ("[0:v][1:v]overlay=enable='between(t,20,30)+between(t,80,90)'[o];"
+        "[o]drawbox=x=0:y=0:w=iw:h=24:color=black:t=fill:enable='between(t,75,95)',"
+        "drawbox=x=0:y=ih-24:w=iw:h=24:color=black:t=fill:enable='between(t,75,95)'[v]"),
+        "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest",
+        str(out)], check=True)
+    empty = tmp_path / "empty_transcript.json"
+    empty.write_text(json.dumps({"language": "en", "segments": []}))
+    cfg = _cfg(project, tmp_path, transcript_path=str(empty), most_replayed=False)
+    cfg["job"]["video_id"] = "cut"
+    doc_moments = M.scan(str(out), str(tmp_path / "m"), cfg)
+    best = doc_moments[0]
+    assert best["start"] < 30 and best["cutscene"] == 0.0          # le gameplay passe devant
+    doc = json.loads((tmp_path / "m" / "cut.json").read_text())
+    every = doc["moments"] + doc["candidates"]
+    boxed = [m for m in every if m["start"] > 60]
+    assert boxed and all(m["cutscene"] > 0.5 and m["score"] < best["score"] for m in boxed)

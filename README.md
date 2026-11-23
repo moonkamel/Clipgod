@@ -421,17 +421,20 @@ clipgod watch <url> --force --auto-prepare                     # envoie chaque c
 1. **Signaux par seconde** :
    - audio : loudness librosa, pics et montées brusques ;
    - texte : mots de hype, MAJUSCULES, répétitions (« no no no »), débit de parole, phrase coupée suivie d'une explosion sonore ;
-   - visuel : flux optique OpenCV et coupes de scène ;
+   - visuel : flux optique OpenCV, coupes de scène et part d'images à bandes noires (cinématiques) ;
    - **most replayed** : récupéré via yt-dlp, VODs YouTube uniquement.
 2. **Fenêtres glissantes** de 15 à 45 s (pas de 5 s). Chaque signal est agrégé puis normalisé par vidéo (percentiles 5-99).
 3. **Score 0-100** :
    - pondérations de `scan.default_weights`, ou celles de `data/model.pkl` s'il existe ;
    - un signal absent (par ex. pas de most replayed sur Twitch) est exclu et les poids sont renormalisés ;
    - avec `model.pkl`, le score mélange l'heuristique et la prédiction du modèle. Le poids du modèle croît avec le nombre de clips d'entraînement (`model_blend`, `model_full_trust_samples`).
+   - **cinématiques déclassées** : score × (1 − 0,7 × part d'images à bandes noires), réglable dans `scan.cutscene`.
+     Une cinématique n'a pas de réaction du streamer et appartient à Rockstar.
 4. **Sélection** :
    - top 3 sans chevauchement (≥ 30 s d'écart) ;
-   - bornes recalées : début sur une prise de parole, fin jamais au milieu d'un mot ;
-   - durée < 30 s centrée sur le pic ;
+   - **durée adaptée à la séquence** (`scan.duration`) : on part du pic et on garde toute la séquence intense,
+     plus 3 s de mise en place avant et 1,5 s de réaction après. Résultat : entre 12 s et 29,5 s selon le moment ;
+   - bornes recalées : début sur une prise de parole, fin sur une fin de phrase, jamais au milieu d'un mot ;
    - sous `scan.min_score`, le moment reste un simple candidat.
 5. **Hooks** : 3 accroches < 60 caractères par moment, générées par des templates locaux sans LLM. Pour l'A/B test : une citation du transcript, une accroche selon le thème (police, crash, fail…) et une selon le signal dominant.
 
