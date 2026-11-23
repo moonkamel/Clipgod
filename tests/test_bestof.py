@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -151,12 +152,13 @@ def test_bestof_from_folder(env, tmp_path):
     cfg, _state, _add, _moments = env
     folder = tmp_path / "bestof"
     folder.mkdir()
-    specs = [("1 - @KaiCenat crash.mp4", "red", "180x320", True), ("2 - wtf.mp4", "green", "320x180", False),
-             ("10 - last.mp4", "blue", "180x320", True)]
+    specs = [("1 - @KaiCenat crash.mp4", "red", "180x320", "stereo"), ("2 - wtf.mp4", "green", "320x180", None),
+             ("10 - last.mp4", "blue", "180x320", "mono")]
     for name, color, size, sound in specs:
         cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c={color}:s={size}:r=15:d=3"]
         if sound:
-            cmd += ["-f", "lavfi", "-i", "sine=f=500:d=3:sample_rate=48000", "-c:a", "aac", "-shortest"]
+            cmd += ["-f", "lavfi", "-i", "sine=f=500:d=3:sample_rate=48000", "-c:a", "aac", "-shortest",
+                    "-ac", "2" if sound == "stereo" else "1"]
         subprocess.run([*cmd, "-c:v", "libx264", "-preset", "ultrafast", str(folder / name)], check=True)
     (folder / "notes.txt").write_text("ignoré")
 
@@ -176,3 +178,23 @@ def test_bestof_from_folder(env, tmp_path):
     archived = folder / "publies" / "2026-11-23"
     assert sorted(p.name for p in archived.iterdir()) == sorted(n for n, *_ in specs)
     assert not list(folder.glob("*.mp4")) and (folder / "notes.txt").is_file()     # dossier prêt pour demain
+
+
+def test_filter_relabels_exotic_audio_layouts():
+    """Régression : « 2 channels (LFE+LFE2) » (vidéo TikTok) faisait échouer aresample."""
+    picks = [B.Pick("a", None, {"has_audio": True, "channels": 2}, 5, rank=1, use_seconds=5),
+             B.Pick("b", None, {"has_audio": True, "channels": 1}, 5, rank=2, use_seconds=5),
+             B.Pick("c", None, {"has_audio": False}, 5, rank=3, use_seconds=5)]
+    graph = B.build_filter(picks, W=180, H=320, fps=15, intro=1, card=0.5, ass_file=Path("o.ass"), fonts_dir=None)
+    assert "[2:a]channelmap=map=0|1:channel_layout=stereo," in graph       # n°1 joué en dernier : entrée 2
+    assert "[1:a]channelmap=map=0|0:channel_layout=stereo," in graph       # mono dupliqué
+    assert "anullsrc=r=48000:cl=stereo,atrim" in graph                      # sans son
+
+
+@needs_ffmpeg
+def test_channelmap_accepts_lfe_layout():
+    graph = ("pan=LFE+LFE2|c0=c0|c1=c0,channelmap=map=0|1:channel_layout=stereo,"
+             "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo")
+    proc = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=f=500:d=0.5:sample_rate=48000",
+                           "-af", graph, "-f", "null", "-"], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr

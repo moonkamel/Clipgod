@@ -255,6 +255,11 @@ def build_filter(picks: Sequence[Pick], *, W: int, H: int, fps: int, intro: floa
         parts.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{card},{norm_a}[ca{k}]")
         parts.append(f"[mv{k}]trim=0:{p.use_seconds},setpts=PTS-STARTPTS[m{k}]")
         audio_in = f"[{k}:a]" if p.meta.get("has_audio", True) else "anullsrc=r=48000:cl=stereo,"
+        if p.meta.get("has_audio", True) and p.meta.get("channels"):
+            # Réétiquetage en stéréo canal par canal, sans le convertisseur de ffmpeg : il refuse certaines
+            # étiquettes exotiques (« 2 channels (LFE+LFE2) » vu sur des vidéos TikTok). Mono -> dupliqué.
+            mapping = "0|1" if int(p.meta["channels"]) >= 2 else "0|0"
+            audio_in += f"channelmap=map={mapping}:channel_layout=stereo,"
         parts.append(f"{audio_in}atrim=0:{p.use_seconds},asetpts=PTS-STARTPTS,{norm_a},"
                      f"afade=t=out:st={max(0.0, p.use_seconds - 0.25)}:d=0.25[ma{k}]")
         labels.append(f"[c{k}][ca{k}][m{k}][ma{k}]")
@@ -302,7 +307,7 @@ def picks_from_folder(folder: str | Path, *, limit: int = 10) -> list[Pick]:
     files = sorted((f for f in root.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTS), key=natural)
     picks: list[Pick] = []
     for f in files[:limit]:
-        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration:stream=codec_type,channels",
                               "-of", "json", str(f)], capture_output=True, text=True, check=False)
         try:
             info = json.loads(out.stdout or "{}")
@@ -311,12 +316,14 @@ def picks_from_folder(folder: str | Path, *, limit: int = 10) -> list[Pick]:
             log.warning("Vidéo illisible ignorée : %s", f.name)
             continue
         kinds = {st.get("codec_type") for st in info.get("streams") or []}
+        channels = next((int(st.get("channels") or 0) for st in info.get("streams") or []
+                         if st.get("codec_type") == "audio"), 0)
         if "video" not in kinds or duration < 1:
             continue
         handle = re.search(r"@([A-Za-z0-9_.]{2,30})", f.stem)
         meta = {"video_id": f"folder_{re.sub(r'[^A-Za-z0-9_]', '_', f.stem)[:60]}", "moment_idx": 0,
                 "streamer": handle.group(1).rstrip(".") if handle else "", "hook": None,
-                "has_audio": "audio" in kinds, "source_file": f.name}
+                "has_audio": "audio" in kinds, "channels": channels, "source_file": f.name}
         picks.append(Pick(f.stem, f, meta, duration, rank=len(picks) + 1))
     return picks
 
