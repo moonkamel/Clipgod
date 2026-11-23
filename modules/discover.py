@@ -181,6 +181,20 @@ class YouTubeDiscover:
         resp = self.service.search().list(**params).execute()
         return [it["id"]["videoId"] for it in resp.get("items", []) if it.get("id", {}).get("videoId")]
 
+    def search_recent(self, query: str, *, video_duration: str, published_after: datetime,
+                      limit: int) -> list[str]:
+        """Vidéos publiées depuis ``published_after``, les plus vues d'abord (``short`` < 4 min, ``long`` > 20 min)."""
+        self._spend(100, "search.list")
+        params: dict[str, Any] = {"part": "id", "q": query, "type": "video", "order": "viewCount",
+                                  "maxResults": min(50, limit), "videoDuration": video_duration,
+                                  "publishedAfter": published_after.isoformat(timespec="seconds").replace("+00:00",
+                                                                                                         "Z")}
+        languages = (self.cfg.get("discover") or {}).get("languages") or []
+        if languages:
+            params["relevanceLanguage"] = str(languages[0])
+        resp = self.service.search().list(**params).execute()
+        return [it["id"]["videoId"] for it in resp.get("items", []) if it.get("id", {}).get("videoId")]
+
     def channel_uploads(self, ident: str, limit: int = 10) -> list[str]:
         self._spend(1, "channels.list")
         kwargs = {"id": ident} if ident.upper().startswith("UC") and len(ident) == 24 else {"forHandle": f"@{ident}"}
@@ -243,17 +257,21 @@ def youtube_items(videos: Iterable[Mapping[str, Any]], *, now: datetime, campaig
     return items
 
 
+def _youtube_service(cfg: Mapping[str, Any]) -> Any:
+    key = get_env(get(cfg, "discover.env.youtube_api_key", "YOUTUBE_API_KEY"))
+    if not key:
+        raise ConfigError("YOUTUBE_API_KEY absente : YouTube ignoré.")
+    from googleapiclient.discovery import build
+
+    return build("youtube", "v3", developerKey=key, cache_discovery=False)
+
+
 def discover_youtube(cfg: Mapping[str, Any], campaigns: CampaignTargets, *, now: datetime,
                      service: Any = None, limit: int = 25) -> list[SourceItem]:
     dcfg = cfg.get("discover") or {}
     ycfg = dcfg.get("youtube") or {}
     if service is None:
-        key = get_env(get(cfg, "discover.env.youtube_api_key", "YOUTUBE_API_KEY"))
-        if not key:
-            raise ConfigError("YOUTUBE_API_KEY absente : YouTube ignoré.")
-        from googleapiclient.discovery import build
-
-        service = build("youtube", "v3", developerKey=key, cache_discovery=False)
+        service = _youtube_service(cfg)
     quota = YouTubeQuota.from_config(cfg)
     budget = min(int(ycfg.get("max_units_per_run", 300)),
                  max(0, int(ycfg.get("daily_budget", 1500)) - _discover_units_today(quota)))
@@ -581,6 +599,107 @@ def discover(cfg: Mapping[str, Any], *, platforms: Sequence[str] | None = None, 
                      "errors": errors, "count": len(sources), "sources": sources})
     log.info("%d source(s) retenue(s) sur %d examinée(s) -> %s", len(sources), len(collected), out)
     return sources
+
+
+# ---------------------------------------------------------------------------
+# Tendances : ce qui buzze sur GTA 6 dans les dernières 24 h
+# ---------------------------------------------------------------------------
+TRENDING_FORMAT = "clipgod-trending/1"
+
+
+def discover_trending(cfg: Mapping[str, Any], *, now: datetime | None = None, service: Any = None,
+                      output: str | Path | None = None) -> dict[str, Any]:
+    """Repère les moments GTA 6 viraux du jour et en déduit les **VODs d'origine** à clipper.
+
+    1. ``search.list`` Shorts (< 4 min) des dernières ``hours`` h, les plus vus d'abord : les clips viraux ;
+    2. ``search.list`` vidéos longues (> 20 min) de la même période : les VODs qui cartonnent ;
+    3. pour les ``hot_channels`` chaînes dont les Shorts explosent, leurs dernières vidéos longues
+       (streamers qui postent eux-mêmes leurs clips) — ces VODs reçoivent le « boost » vues/heure du Short.
+
+    On ne republie jamais les Shorts des autres : ils servent uniquement de signal. Les clips sont recoupés
+    dans les VODs d'origine (crédit au streamer) ; la courbe « most replayed » y localise ensuite le moment viral.
+    Écrit ``data/trending.json`` (clips viraux) et ``data/sources.json`` (VODs à préparer, classées).
+    Coût : ~200 + 2 × hot_channels + quelques unités de quota (sur 10 000/jour).
+    """
+    dcfg: Mapping[str, Any] = cfg.get("discover") or {}
+    tcfg: Mapping[str, Any] = dcfg.get("trending") or {}
+    now = now or utc_now()
+    service = service or _youtube_service(cfg)
+    quota = YouTubeQuota.from_config(cfg)
+    budget = min(int(tcfg.get("max_units", 400)),
+                 max(0, int((dcfg.get("youtube") or {}).get("daily_budget", 1500)) - _discover_units_today(quota)))
+    yt = YouTubeDiscover(service, quota, cfg, budget=budget)
+    query = "|".join(f'"{k}"' for k in dcfg.get("keywords", ["GTA 6"]))
+    since = now - timedelta(hours=float(tcfg.get("hours", 24)))
+    limit = int(tcfg.get("results", 25))
+    campaigns = load_campaigns(path(cfg, "campaigns_txt"))
+
+    short_ids: list[str] = []
+    long_ids: list[str] = []
+    try:
+        short_ids = yt.search_recent(query, video_duration="short", published_after=since, limit=limit)
+        long_ids = yt.search_recent(query, video_duration="long", published_after=since, limit=limit)
+    except QuotaExceeded as exc:
+        log.warning("YouTube : %s — tendances partielles.", exc)
+    details = {v["id"]: v for v in (yt.videos(short_ids + long_ids) if short_ids or long_ids else [])}
+
+    shorts = youtube_items([details[i] for i in short_ids if i in details], now=now, campaigns=campaigns)
+    viral = sorted((it for it in shorts if title_matches(it.title, dcfg.get("keywords") or ["GTA 6"])
+                    and language_ok(it, dcfg)), key=lambda it: -it.views_per_hour)
+
+    # Chaînes dont les Shorts explosent : leurs dernières VODs, avec le boost du Short.
+    boost: dict[str, tuple[float, str]] = {}
+    hot_ids: list[str] = []
+    seen_channels: set[str] = set()
+    for it in viral:
+        channel_id = (details.get(it.id or "", {}).get("snippet") or {}).get("channelId")
+        if not channel_id or channel_id in seen_channels:
+            continue
+        seen_channels.add(channel_id)
+        if len(seen_channels) > int(tcfg.get("hot_channels", 5)):
+            break
+        try:
+            uploads = yt.channel_uploads(channel_id, limit=int(tcfg.get("uploads_per_channel", 8)))
+        except QuotaExceeded as exc:
+            log.warning("YouTube : %s", exc)
+            break
+        for vid in uploads:
+            boost.setdefault(vid, (it.views_per_hour, it.title))
+        hot_ids += [v for v in uploads if v not in details]
+    if hot_ids:
+        try:
+            details.update({v["id"]: v for v in yt.videos(hot_ids)})
+        except QuotaExceeded as exc:
+            log.warning("YouTube : %s", exc)
+
+    vod_ids = list(dict.fromkeys(long_ids + [v for v in boost if v in details]))
+    vods = youtube_items([details[i] for i in vod_ids if i in details], now=now, campaigns=campaigns)
+    vod_cfg = {**dcfg, "max_vod_age_hours": float(tcfg.get("max_vod_age_hours", 48)), "min_viewers": 0}
+    candidates = []
+    for it in vods:
+        if it.status != "vod" or not keep(it, vod_cfg, now=now):
+            continue
+        b, why = boost.get(it.id or "", (0.0, ""))
+        it.extra["boost"] = b
+        it.extra["reason"] = f"Short viral : {why[:60]}" if why else "VOD très vue"
+        candidates.append(it)
+    candidates.sort(key=lambda it: (it.campaign is None, -(it.views_per_hour + it.extra["boost"])))
+
+    sources = [{k: v for k, v in asdict(it).items() if k != "extra"} | {
+        "duration": round(it.duration), "views_per_hour": round(it.views_per_hour, 1),
+        "language": it.extra.get("language"), "trending": True, "boost": round(it.extra["boost"], 1),
+        "reason": it.extra["reason"]} for it in candidates]
+    viral_out = [{"url": it.url, "title": it.title, "channel": it.streamer, "views": it.viewers,
+                  "views_per_hour": round(it.views_per_hour, 1), "published_at": it.published_at} for it in viral]
+    doc = {"format": TRENDING_FORMAT, "generated_at": utc_now_iso(), "hours": float(tcfg.get("hours", 24)),
+           "viral": viral_out, "sources": sources, "units": yt.spent}
+    write_json(resolve_path(cfg, get(cfg, "paths.trending", "data/trending.json")), doc)
+    out = Path(output) if output else path(cfg, "sources_json")
+    write_json(out, {"format": SOURCES_FORMAT, "generated_at": utc_now_iso(), "platforms": ["youtube"],
+                     "errors": {}, "count": len(sources), "sources": sources, "trending": True})
+    log.info("Tendances : %d Short(s) viral(aux), %d VOD(s) d'origine, %d unité(s) de quota",
+             len(viral_out), len(sources), yt.spent)
+    return doc
 
 
 def best_source(config: Mapping[str, Any]) -> str:

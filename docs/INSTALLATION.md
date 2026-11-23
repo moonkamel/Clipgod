@@ -18,11 +18,12 @@ Comptez **environ 1 h** la première fois, dont la moitié pour créer les clés
 8. [Connecter Google Drive](#8-connecter-google-drive)
 9. [Préparer le notebook GPU (Colab)](#9-préparer-le-notebook-gpu-colab)
 10. [Option : Kaggle](#10-option--kaggle)
-11. [Option : TikTok et Instagram (Upload-Post)](#11-option--tiktok-et-instagram-upload-post)
+11. [Option : TikTok et Instagram](#11-option--tiktok-et-instagram)
 12. [Cibler vos chaînes et campagnes](#12-cibler-vos-chaînes-et-campagnes)
 13. [Premier essai de bout en bout](#13-premier-essai-de-bout-en-bout)
 14. [Automatiser `learn`](#14-automatiser-learn)
-15. [Dépannage](#15-dépannage)
+15. [Top 5 GTA 6 du jour, chaque matin](#15-top-5-gta-6-du-jour-chaque-matin)
+16. [Dépannage](#16-dépannage)
 
 ---
 
@@ -439,7 +440,47 @@ puis : Planificateur de tâches › *Créer une tâche de base* › Déclencheur
 
 ---
 
-## 15. Dépannage
+## 15. Top 5 GTA 6 du jour, chaque matin
+
+Le cycle quotidien tient en une tâche planifiée et un clic sur Colab :
+
+| Moment | Où | Ce qui se passe |
+|---|---|---|
+| Le matin (tâche planifiée) | PC | `git pull` → `clipgod sync` (clips de la veille) → `clipgod bestof` (le Top 5 du jour) → `clipgod discover --trending --prepare 2` (ce qui buzze) → Colab s'ouvre |
+| Juste après | Colab | **Exécution › Tout exécuter**, onglet ouvert jusqu'à la fin (~30-60 min pour 2 VODs) |
+| Le lendemain matin | PC | la tâche récupère ces clips et monte le Top 5 suivant |
+
+**Installer la tâche** (une seule fois, dans PowerShell, depuis le dossier `clipgod`) :
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_daily_task.ps1 -At 09:15
+```
+
+Si le PC est éteint à l'heure prévue, la tâche part au démarrage suivant. Pour la lancer tout de suite :
+`Start-ScheduledTask -TaskName "ClipGod quotidien"`. Journal : `logs\daily_<date>.txt`.
+Pour la supprimer : `Unregister-ScheduledTask -TaskName "ClipGod quotidien" -Confirm:$false`.
+
+**À la main**, sans tâche planifiée :
+
+```powershell
+clipgod discover --trending              # ce qui buzze : Shorts viraux du jour -> VODs d'origine
+clipgod discover --trending --prepare 2  # … et prépare les 2 meilleures VODs pour Colab
+clipgod bestof --plan                    # sélection du Top 5 sans montage
+clipgod bestof                           # monte output\bestof\TOP5_<date>.mp4 + la légende .txt
+```
+
+**Comment le Top 5 est choisi** (`bestof` dans `config.yaml`) : les moments rendus depuis 48 h, une variante par
+moment (le meilleur hook), sans cinématiques ni sources dans une autre langue, 2 moments maximum par streamer,
+jamais un moment déjà utilisé dans un précédent Top 5. Compte à rebours #5 → #1, ~90 s, crédits dans la légende.
+Il faut au moins 3 moments récents : avec 2 VODs par jour (3 moments chacune), c'est largement suffisant.
+
+**Pourquoi les Shorts viraux ne sont pas republiés** : TikTok déclasse le « contenu non original » et les
+créateurs signalent les re-uploads. ClipGod s'en sert uniquement comme signal pour trouver les VODs d'origine, puis
+recoupe le moment lui-même (sous-titres, hook, classement, crédit) : c'est un montage transformé, qui t'appartient.
+
+---
+
+## 16. Dépannage
 
 | Symptôme | Cause probable | Solution |
 |---|---|---|

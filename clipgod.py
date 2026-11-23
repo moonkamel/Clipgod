@@ -71,6 +71,10 @@ def discover(
     no_cache: bool = typer.Option(False, "--no-cache", help="Ignore le cache local de 5 min."),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Défaut : data/sources.json."),
     show: int = typer.Option(15, "--show", help="Nombre de lignes affichées."),
+    trending: bool = typer.Option(False, "--trending", "-t", help="Ce qui buzze : Shorts GTA 6 viraux des "
+                                  "dernières 24 h -> leurs VODs d'origine (YouTube)."),
+    prepare_top: int = typer.Option(0, "--prepare", help="Prépare aussitôt les N meilleures VODs (jobs Drive, "
+                                    "téléchargement par le notebook). Idéal pour la tâche quotidienne."),
 ) -> None:
     """Trouve les streams live / VODs < 24h (> 45 min) GTA 6 -> data/sources.json."""
     from rich.table import Table
@@ -80,6 +84,9 @@ def discover(
     from modules.discover import discover as run_discover
 
     cfg = ctx.obj["config"]
+    if trending:
+        _discover_trending(ctx, show=show, prepare_top=prepare_top)
+        return
     try:
         sources = run_discover(cfg, platforms=platform or None, limit=limit, use_cache=not no_cache, output=output)
     except DiscoverError as exc:
@@ -99,6 +106,55 @@ def discover(
         best = next((s for s in sources if s["status"] == "vod"), None)
         if best:
             console.print(f"→ Clipper la meilleure VOD : [bold]clipgod run --source {best['url']}[/]")
+
+
+def _discover_trending(ctx: typer.Context, *, show: int, prepare_top: int) -> None:
+    from rich.table import Table
+
+    from core.config import ConfigError
+    from core.quota import YouTubeQuota
+    from modules.discover import discover_trending
+
+    cfg = ctx.obj["config"]
+    try:
+        doc = discover_trending(cfg)
+    except ConfigError as exc:
+        console.print(f"[red]discover --trending :[/] {exc}")
+        raise typer.Exit(1) from None
+    viral = Table(title=f"Ce qui buzze sur GTA 6 ({len(doc['viral'])} Shorts, {int(doc['hours'])} h)")
+    for col in ("#", "chaîne", "Short", "vues", "vues/h"):
+        viral.add_column(col, overflow="fold")
+    for i, v in enumerate(doc["viral"][:min(show, 10)], 1):
+        viral.add_row(str(i), v["channel"], v["title"][:60], f"{v['views']:,}".replace(",", " "),
+                      f"{v['views_per_hour']:,.0f}".replace(",", " "))
+    console.print(viral)
+    sources = doc["sources"]
+    table = Table(title=f"VODs d'origine à clipper ({len(sources)})")
+    for col in ("#", "streamer", "titre", "durée", "vues/h", "pourquoi"):
+        table.add_column(col, overflow="fold")
+    for i, s in enumerate(sources[:show], 1):
+        h, m = divmod(int(s["duration"]) // 60, 60)
+        table.add_row(str(i), s["streamer"], s["title"][:50], f"{h}h{m:02d}",
+                      f"{s['views_per_hour'] + s.get('boost', 0):,.0f}".replace(",", " "), s.get("reason", ""))
+    console.print(table)
+    console.print(f"[dim]Quota YouTube restant aujourd'hui : {YouTubeQuota.from_config(cfg).remaining()} u · "
+                  "les Shorts des autres servent de signal, on ne les republie pas.[/]")
+    if not sources:
+        console.print("[yellow]Aucune VOD d'origine exploitable aujourd'hui.[/]")
+        return
+    if not prepare_top:
+        console.print("→ Préparer les 2 meilleures : [bold]clipgod discover --trending --prepare 2[/]")
+        return
+    created = 0
+    for s in sources[:prepare_top]:
+        console.print(f"\n[bold]Préparation[/] {s['streamer']} — {s['title'][:60]}")
+        try:
+            job = _prepare_job(ctx, s["url"], streamer=s["streamer"], download="cloud")
+        except typer.Exit:
+            continue
+        created += 0 if job.get("_existing") else 1
+        _print_next_steps(cfg, job)
+    console.print(f"\n[bold green]{created} nouveau(x) job(s).[/] Ouvre Colab : Exécution › Tout exécuter.")
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +570,47 @@ def tiktok(
         console.print("   [green]✔ enregistré[/]\n")
     console.print(f"[bold green]{done} post(s) enregistré(s).[/] Les liens collés servent à clipgod learn "
                   "(vues à saisir dans data/manual_views.csv).")
+
+
+@app.command()
+def bestof(
+    ctx: typer.Context,
+    count: Optional[int] = typer.Option(None, "--count", "-n", help="Nombre de moments (défaut : 5)."),
+    hours: Optional[float] = typer.Option(None, "--hours", help="Moments rendus depuis N heures (défaut : 48)."),
+    allow_repeat: bool = typer.Option(False, "--allow-repeat", help="Autorise des moments déjà utilisés."),
+    plan_only: bool = typer.Option(False, "--plan", help="Affiche la sélection sans monter la vidéo."),
+    open_folder: bool = typer.Option(True, "--open/--no-open", help="Ouvre le dossier à la fin."),
+) -> None:
+    """Top 5 GTA 6 du jour : compilation verticale #5 -> #1 des meilleurs moments récents + légende."""
+    from rich.table import Table
+
+    from modules.bestof import BestOfError, make_bestof, select_picks
+
+    cfg = ctx.obj["config"]
+    if plan_only or ctx.obj.get("dry_run"):
+        picks = select_picks(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None)
+        table = Table(title=f"Sélection du best-of ({len(picks)} moments)")
+        for col in ("rang", "clip", "streamer", "score", "hook"):
+            table.add_column(col, overflow="fold")
+        for p in picks:
+            table.add_row(f"#{p.rank}", p.path.name, p.streamer, f"{p.score:.0f}", str(p.meta.get("hook") or ""))
+        console.print(table)
+        return
+    try:
+        result = make_bestof(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None)
+    except BestOfError as exc:
+        console.print(f"[red]bestof :[/] {exc}")
+        raise typer.Exit(1) from None
+    for p in sorted(result.picks, key=lambda p: -p.rank):
+        console.print(f"  #{p.rank}  @{p.streamer}  [dim]{p.use_seconds:.0f} s · score {p.score:.0f}[/]  "
+                      f"{p.meta.get('hook') or ''}")
+    console.print(f"\n[bold green]✔ {result.video.name}[/] ({result.duration:.0f} s) + {result.caption_file.name} "
+                  f"dans {result.video.parent}")
+    console.print("[dim]Publie-le dans TikTok Studio avec la légende du .txt (crédits compris).[/]")
+    if open_folder:
+        from modules.manual import open_folder as _open
+
+        _open(result.video.parent)
 
 
 # ---------------------------------------------------------------------------

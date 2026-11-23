@@ -266,3 +266,73 @@ def test_youtube_language_and_relevance_param(cfg):
     yt = FakeYouTube()
     D.discover_youtube(cfg, D.CampaignTargets(), now=NOW, service=yt)
     assert all(kw.get("relevanceLanguage") == "en" for name, kw in yt.calls if name == "search")
+
+
+# ---------------------------------------------------------------- tendances
+class FakeTrending:
+    """Shorts viraux (S1 par la chaîne du streamer UCstreamer, S2 hors sujet) + 1 VOD longue (L1)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def search(self):
+        outer = self
+
+        class S:
+            def list(self, **kw):
+                outer.calls.append(("search", kw))
+                ids = ["S1", "S2"] if kw["videoDuration"] == "short" else ["L1"]
+                return _Req({"items": [{"id": {"videoId": i}} for i in ids]})
+        return S()
+
+    def channels(self):
+        outer = self
+
+        class C:
+            def list(self, **kw):
+                outer.calls.append(("channels", kw))
+                return _Req({"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UUs"}}}]})
+        return C()
+
+    def playlistItems(self):
+        class P:
+            def list(self, **kw):
+                return _Req({"items": [{"contentDetails": {"videoId": v}} for v in ("S1", "V2", "OLD")]})
+        return P()
+
+    def videos(self):
+        def vid(i, title, ch, hours, dur, views, chid="UCother"):
+            return {"id": i, "snippet": {"title": title, "channelTitle": ch, "channelId": chid,
+                                         "liveBroadcastContent": "none", "publishedAt": iso(NOW - timedelta(hours=hours)),
+                                         "defaultAudioLanguage": "en"},
+                    "contentDetails": {"duration": dur}, "statistics": {"viewCount": str(views)}}
+        catalog = {
+            "S1": vid("S1", "He CRASHED the plane in GTA 6 💀", "Streamy", 5, "PT40S", 2_000_000, "UCstreamer"),
+            "S2": vid("S2", "Minecraft funny moments", "Other", 2, "PT30S", 9_000_000),
+            "L1": vid("L1", "GTA 6 day 3 full stream", "BigVods", 10, "PT3H", 200_000),
+            "V2": vid("V2", "GTA 6 STREAM - plane heist", "Streamy", 30, "PT2H30M", 50_000, "UCstreamer"),
+            "OLD": vid("OLD", "GTA 6 first look", "Streamy", 24 * 9, "PT2H", 900_000, "UCstreamer"),
+        }
+        outer = self
+
+        class V:
+            def list(self, **kw):
+                outer.calls.append(("videos", kw))
+                return _Req({"items": [catalog[i] for i in kw["id"].split(",") if i in catalog]})
+        return V()
+
+
+def test_trending_finds_viral_shorts_and_their_source_vods(cfg):
+    yt = FakeTrending()
+    doc = D.discover_trending(cfg, now=NOW, service=yt)
+    assert [v["title"] for v in doc["viral"]] == ["He CRASHED the plane in GTA 6 💀"]     # hors sujet écarté
+    urls = [s["url"].split("=")[-1] for s in doc["sources"]]
+    assert urls == ["V2", "L1"]                       # VOD du streamer viral boostée, VOD de 9 jours écartée
+    assert doc["sources"][0]["boost"] > 0 and "Short viral" in doc["sources"][0]["reason"]
+    searches = [kw for name, kw in yt.calls if name == "search"]
+    assert [s["videoDuration"] for s in searches] == ["short", "long"]
+    assert all(s["publishedAfter"].startswith("2026-11-21T20:00:00") for s in searches)
+    saved = json.loads((Path(cfg["_meta"]["root"]) / "data" / "sources.json").read_text())
+    assert saved["trending"] and [s["id"] for s in saved["sources"]] == ["V2", "L1"]
+    assert (Path(cfg["_meta"]["root"]) / "data" / "trending.json").is_file()
+    assert doc["units"] <= 230

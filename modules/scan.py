@@ -774,7 +774,7 @@ def refine_bounds(start: float, end: float, peak: float, words: Sequence[Mapping
 
 
 def adaptive_bounds(curve: np.ndarray, peak: float, words: Sequence[Mapping[str, Any]], *, clip_min: float,
-                    clip_max: float, duration: float, setup: float = 3.0, tail: float = 1.5,
+                    clip_max: float, duration: float, setup: float = 5.0, tail: float = 3.0,
                     rel_threshold: float = 0.35, quiet: int = 2, context: int = 60) -> tuple[float, float]:
     """Bornes « optimales » d'un moment autour de son pic, au lieu d'une durée fixe.
 
@@ -1051,7 +1051,7 @@ def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
         dcfg = scfg.get("duration") or {}
         adaptive = None
         if dcfg.get("mode", "adaptive") == "adaptive":
-            clip_min = max(clip_min, float(dcfg.get("min_seconds", 12)))
+            clip_min = max(clip_min, float(dcfg.get("min_seconds", 20)))
             adaptive = {k: dcfg[k] for k in ("setup", "tail", "rel_threshold", "quiet") if k in dcfg}
         top_k = int(scfg.get("top_k_moments", 3))
         picked = select_moments(
