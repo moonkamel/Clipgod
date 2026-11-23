@@ -478,6 +478,17 @@ clipgod bestof --viral   # Top 5 classé par vues des Shorts -> output\bestof\
 Un Short dont la VOD d'origine est introuvable (pas de lien, VOD supprimée, Short accéléré…) est ignoré :
 `clipgod viral` en examine jusqu'à 25 pour en garder 5. Réglages : section `viral` de `config.yaml`.
 
+**Veille : les Shorts gameplay les plus vus**
+
+```powershell
+clipgod topshorts               # top 10 des 48 h, gameplay uniquement -> top10_shorts_gta6.txt
+clipgod topshorts --hours 24    # sur 24 h ; --all pour enlever le filtre ; -n 20 pour 20 Shorts
+```
+
+Le filtre lit le titre, les tags et la description : un Short de réaction, de comparaison (« GTA 5 vs GTA 6 »),
+d'actualité, de théorie ou de stream est écarté ; un Short qui parle de gameplay (crash, police, mission, physique,
+secret…) est gardé. Les Shorts écartés sont listés en bas du fichier pour vérifier qu'aucun n'a été oublié.
+
 **Avec tes propres vidéos** : dépose-les dans le dossier `bestof\` (à la racine de `clipgod`), nommées dans
 l'ordre du classement (`1 - ….mp4` = n°1). Un `@pseudo` dans le nom sert de crédit (`1 - @KaiCenat crash.mp4`).
 

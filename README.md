@@ -409,6 +409,8 @@ clipgod bestof                            # compilation #5 -> #1 des meilleurs m
 - **Best-of** : une variante par moment, sans cinématiques, ≤ 2 moments par streamer, jamais deux fois le même
   moment ; carte titre, cartes « #N @streamer » sur fond flouté, badge pendant chaque moment ; ~90 s.
   Sortie : `output/bestof/TOP5_<date>.mp4` + `.txt` (classement, crédits, hashtags).
+- **Veille** : `clipgod topshorts` liste les 10 Shorts GTA 6 **gameplay** les plus vus des 48 h (filtre sur titre,
+  tags et description ; réactions, comparaisons, news et streams écartés) dans `top10_shorts_gta6.txt`.
 - **Vos propres vidéos** : `clipgod bestof --folder bestof` compile les vidéos du dossier `bestof/` (ordre des noms
   = classement, `@pseudo` dans le nom = crédit), puis les range dans `bestof/publies/<date>/`.
 - **Chaque matin** : `scripts/daily.ps1` (sync → bestof → tendances → Colab), installé comme tâche planifiée
