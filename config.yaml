@@ -325,6 +325,8 @@ viral:
 tiktok_top:
   tags: [gta6, gtavi, gta6gameplay]  # pages tiktok.com/tag/<hashtag> lues
   scrolls: 8                        # défilements par page (~30-60 vidéos par hashtag)
+  languages: [en]                   # langue de la description (détection TikTok, sinon devinée) ; [] = toutes
+  detail_limit: 60                  # pages vidéo ouvertes au plus pour lire vues/langue manquantes (~2 s chacune)
 
 # ---------------------------------------------------------------------
 # Best-of quotidien (laptop) : « Top 5 GTA 6 du jour » -> output/bestof/

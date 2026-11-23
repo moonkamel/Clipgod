@@ -612,6 +612,8 @@ def toptiktok(
     tags: Optional[str] = typer.Option(None, "--tags", help="Hashtags séparés par des virgules (défaut : config)."),
     scrolls: Optional[int] = typer.Option(None, "--scrolls", help="Défilements par hashtag (plus = plus de vidéos)."),
     all_videos: bool = typer.Option(False, "--all", help="Sans filtre gameplay."),
+    lang: Optional[str] = typer.Option(None, "--lang", help="Langues gardées, ex. « en » ou « en,fr » ; « all » = "
+                                       "toutes (défaut : config, en)."),
     headless: bool = typer.Option(False, "--headless", help="Navigateur invisible (déconseillé : TikTok bloque plus)."),
     output: Path = typer.Option(Path("top10_tiktok_gta6.txt"), "--output", "-o", help="Fichier texte produit."),
 ) -> None:
@@ -625,6 +627,8 @@ def toptiktok(
         out, kept = run_toptiktok(cfg, hours=hours, count=count,
                                   tags=[t.strip().lstrip("#") for t in tags.split(",")] if tags else None,
                                   scrolls=scrolls, headless=headless, gameplay_only=not all_videos, output=output,
+                                  languages=None if lang is None else ([] if lang.lower() == "all" else
+                                                                       [x.strip() for x in lang.split(",")]),
                                   say=console.print)
     except TikTokError as exc:
         console.print(f"[red]toptiktok :[/] {exc}")
