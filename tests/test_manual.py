@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -131,3 +132,36 @@ def test_cli_tiktok_choose(env, monkeypatch):
     assert res.exit_code == 0, res.output
     assert played == ["m0_h1.mp4"]
     assert list(state.load()["posts"]) == ["m0_h1@tiktok"]
+
+
+def test_hook_quality_and_safe_title():
+    assert MN.hook_quality("theRadBrad instantly regretted this") > MN.hook_quality('"Oh, no!" 💀')
+    assert MN.hook_quality('"Oh, no!" 💀') > MN.hook_quality("The loudest moment of the stream 🔊")
+    assert MN.hook_quality('ShehzadGaming4K: "भाई अरे भाई"') == 0
+    assert MN.safe_title('"LET\'S GO." 💀') == "LET'S GO"
+    assert MN.safe_title("Wait for it… 😳") == "Wait for it"
+    assert MN.safe_title("Who? <did> this/now") == "Who did thisnow"
+
+
+def test_export_one_video_per_moment_with_captions(env):
+    cfg, state, add = env
+    root = Path(cfg["_meta"]["root"])
+    add("yt_1_0", moment_idx=0, score=80, hook='"LET\'S GO." 💀')
+    add("yt_1_0_h1", moment_idx=0, variant=1, score=80, hook="Nobody expected this 😳")
+    add("yt_1_0_h2", moment_idx=0, variant=2, score=80, hook="The loudest moment of the stream 🔊")
+    add("yt_1_1", moment_idx=1, score=60, hook="theRadBrad completely lost it 😱")
+    add("hi_0", video_id="hi", score=99, hook="Wait for it… 😳")                  # source en hindi
+    mdir = root / "output" / "moments"
+    mdir.mkdir(parents=True, exist_ok=True)
+    (mdir / "hi.json").write_text(json.dumps({"video_id": "hi", "language": "hi"}))
+    (mdir / "yt_1.json").write_text(json.dumps({"video_id": "yt_1", "language": "en"}))
+    rep = MN.export_ready(cfg, now=NOW)
+    names = [t.name for t, _ in rep.files]
+    assert names == ["01 - Nobody expected this.mp4", "02 - theRadBrad completely lost it.mp4"]
+    assert rep.skipped_language == ["hi_0"]
+    text = (rep.folder / "legendes.txt").read_text(encoding="utf-8-sig")
+    assert "===== 01 - Nobody expected this.mp4 =====" in text and "Credit: @theradbrad" in text
+    assert "Programmer :" in text and "😳" in text
+    assert state.load()["posts"]["yt_1_0_h1@tiktok"]["status"] == "exported"
+    rep2 = MN.export_ready(cfg, now=NOW)                                          # rien de nouveau
+    assert rep2.files == [] and not list(rep.folder.glob("*.mp4"))
