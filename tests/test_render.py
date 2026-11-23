@@ -235,3 +235,19 @@ def test_render_removes_letterbox(tmp_path):
                           "-vf", "format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True, check=True).stdout
     frame = np.frombuffer(raw, np.uint8).reshape(640, 360)
     assert frame[:20].mean() > 40 and frame[-20:].mean() > 40
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("folder", ["C:/Users/Utilisateur/AppData", "d'un, dossier [x]; y"])
+def test_ass_path_survives_windows_like_paths(tmp_path, folder):
+    """Régression Windows : « C:\\…\\overlay.ass » cassait -filter_complex (No option name near …)."""
+    d = tmp_path / folder
+    d.mkdir(parents=True)
+    ass = d / "o.ass"
+    ass.write_text(R.build_ass(words=[], clip_start=0, clip_duration=1, rcfg={"width": 160, "height": 120},
+                               hook="Hi"), encoding="utf-8")
+    graph = f"[0:v]ass=filename={R._ass_path(ass)}:fontsdir={R._ass_path(d)}[v]"
+    proc = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=160x120:d=0.5",
+                           "-filter_complex", graph, "-map", "[v]", "-frames:v", "1", "-f", "null", "-"],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr

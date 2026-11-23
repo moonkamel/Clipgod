@@ -96,9 +96,13 @@ def download_cached(url: str, target: Path, *, timeout: int = 60) -> Path | None
 
 
 def _ass_path(p: Path) -> str:
-    """Échappe un chemin pour une option de filtre ffmpeg (``ass=filename=...``)."""
-    s = str(p).replace("\\", "/")
-    return s.replace(":", r"\:").replace("'", r"\'").replace(",", r"\,")
+    """Chemin pour une option de filtre ffmpeg (``ass=filename=...``), valable sous Windows comme Linux.
+
+    Deux niveaux d'échappement dans ``-filter_complex`` : les guillemets simples protègent le chemin au niveau du
+    graphe (virgules, crochets, points-virgules), et ``\\:`` protège le « C: » de Windows au niveau de l'option.
+    """
+    s = str(p).replace("\\", "/").replace(":", r"\:")
+    return "'" + s.replace("'", r"'\\\''") + "'"
 
 
 def strip_emoji(text: str) -> str:
