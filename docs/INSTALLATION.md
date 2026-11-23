@@ -489,6 +489,19 @@ Le filtre lit le titre, les tags et la description : un Short de réaction, de c
 d'actualité, de théorie ou de stream est écarté ; un Short qui parle de gameplay (crash, police, mission, physique,
 secret…) est gardé. Les Shorts écartés sont listés en bas du fichier pour vérifier qu'aucun n'a été oublié.
 
+**Veille TikTok** (une fois : `pip install playwright`, aucun navigateur à télécharger) :
+
+```powershell
+clipgod toptiktok               # top 10 gameplay des 48 h -> top10_tiktok_gta6.txt
+clipgod toptiktok --hours 24 --scrolls 15   # sur 24 h, en lisant plus de vidéos
+```
+
+TikTok n'a pas d'API gratuite : ClipGod ouvre les pages #gta6, #gtavi et #gta6gameplay dans **ton Chrome** (ou
+Edge), fait défiler et lit les liens, les vues et les descriptions ; la date de publication est déduite de
+l'identifiant de chaque vidéo. Ne ferme pas la fenêtre pendant la lecture (~1 min). Si TikTok affiche une
+vérification, résous-la une fois : les cookies sont gardés dans `cache\tiktok_profile`. Seules les vidéos chargées
+sur ces pages sont classées (quelques centaines au plus), pas tout TikTok.
+
 **Avec tes propres vidéos** : dépose-les dans le dossier `bestof\` (à la racine de `clipgod`), nommées dans
 l'ordre du classement (`1 - ….mp4` = n°1). Un `@pseudo` dans le nom sert de crédit (`1 - @KaiCenat crash.mp4`).
 

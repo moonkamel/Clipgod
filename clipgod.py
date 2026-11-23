@@ -605,6 +605,39 @@ def topshorts(
 
 
 @app.command()
+def toptiktok(
+    ctx: typer.Context,
+    hours: float = typer.Option(48, "--hours", help="Vidéos publiées depuis N heures (24 ou 48)."),
+    count: int = typer.Option(10, "--count", "-n", help="Nombre de vidéos listées."),
+    tags: Optional[str] = typer.Option(None, "--tags", help="Hashtags séparés par des virgules (défaut : config)."),
+    scrolls: Optional[int] = typer.Option(None, "--scrolls", help="Défilements par hashtag (plus = plus de vidéos)."),
+    all_videos: bool = typer.Option(False, "--all", help="Sans filtre gameplay."),
+    headless: bool = typer.Option(False, "--headless", help="Navigateur invisible (déconseillé : TikTok bloque plus)."),
+    output: Path = typer.Option(Path("top10_tiktok_gta6.txt"), "--output", "-o", help="Fichier texte produit."),
+) -> None:
+    """Top des vidéos TikTok GTA 6 gameplay les plus vues (Chrome piloté, sans API) -> fichier .txt."""
+    from modules.tiktok_top import TikTokError, run_toptiktok
+
+    cfg = ctx.obj["config"]
+    console.print("[dim]Une fenêtre Chrome va s'ouvrir sur TikTok : ne la ferme pas. Si une vérification "
+                  "s'affiche, résous-la (une seule fois).[/]")
+    try:
+        out, kept = run_toptiktok(cfg, hours=hours, count=count,
+                                  tags=[t.strip().lstrip("#") for t in tags.split(",")] if tags else None,
+                                  scrolls=scrolls, headless=headless, gameplay_only=not all_videos, output=output,
+                                  say=console.print)
+    except TikTokError as exc:
+        console.print(f"[red]toptiktok :[/] {exc}")
+        raise typer.Exit(1) from None
+    for i, (v, why) in enumerate(kept, 1):
+        console.print(f"{i:>2}. [bold]{(v.text or '(sans description)')[:70]}[/]\n    @{v.author} · "
+                      f"{v.views:,} vues · {v.url}".replace(",", " ") + (f" [dim]({why})[/]" if why else ""))
+    if not kept:
+        console.print("[yellow]Aucune vidéo gameplay récente trouvée : essaie --hours 72, --scrolls 15 ou --all.[/]")
+    console.print(f"\n✔ {out.resolve()}")
+
+
+@app.command()
 def viral(
     ctx: typer.Context,
     count: Optional[int] = typer.Option(None, "--count", "-n", help="Moments à préparer (défaut : 5)."),
