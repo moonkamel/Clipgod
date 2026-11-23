@@ -65,6 +65,9 @@ discover:
   cache_ttl_seconds: 300            # cache local 5 min par plateforme
   max_vod_age_hours: 24
   min_duration_minutes: 45          # VOD > 45 min ; live en cours depuis > 45 min
+  max_duration_minutes: 300         # VOD de plus de 5 h ignorées (téléchargement/traitement trop lourds)
+  languages: [en, fr]               # langue du contenu = langue de l'audience des campagnes ; [] = toutes
+  keep_unknown_language: true       # garder une vidéo sans langue déclarée (titre en alphabet latin)
   max_results_per_platform: 25
   min_viewers: 500                  # ignoré pour les chaînes de campaigns.txt
   keywords: ["GTA 6", "GTA VI", "GTA6", "Grand Theft Auto VI", "Grand Theft Auto 6"]
@@ -221,11 +224,11 @@ render:
     highlight_color: "&H0000E6FF"   # ASS &H00BBGGRR (jaune) ou #RRGGBB
   hook:
     duration_seconds: 2.0
-    font_size: 72
+    font_size: 92                   # +30 % : lisible sur téléphone dès la 1re seconde
     box_color: white
     text_color: black
-    box_padding: 18
-    y_position_ratio: 0.20
+    box_padding: 22
+    y_position_ratio: 0.20          # descendu automatiquement sous le visage du streamer s'il est dans cette zone
     animation: pop                  # pop | slide | none
     strip_emoji: true               # libass n'affiche pas les emojis couleur
   streamer_overlay:

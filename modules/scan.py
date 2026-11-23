@@ -524,11 +524,16 @@ def visual_signals(video_path: str, n_bins: int, vcfg: Mapping[str, Any]) -> dic
         with tempfile.TemporaryFile() as err, subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err) as proc:
             prev = prev_hist = None
             idx = 0
+            expected = max(1, int(n_bins * fps))
+            next_report = 0.1
             assert proc.stdout is not None
             while True:
                 buf = proc.stdout.read(frame_bytes)
                 if len(buf) < frame_bytes:
                     break
+                if idx / expected >= next_report:
+                    log.info("analyse visuelle %d%%", int(100 * idx / expected))
+                    next_report += 0.1
                 cur = np.frombuffer(buf, dtype=np.uint8).reshape(height, width)
                 hist = cv2.calcHist([cur], [0], None, [32], [0, 256])
                 cv2.normalize(hist, hist, alpha=1.0, norm_type=cv2.NORM_L1)

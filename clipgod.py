@@ -140,13 +140,17 @@ def _prepare_job(ctx: typer.Context, source: str, **kwargs) -> dict:
     drive = get_drive(cfg)
     with Progress("[progress.description]{task.description}", BarColumn(), DownloadColumn(), TransferSpeedColumn(),
                   console=console, transient=True) as bar:
-        task = bar.add_task("transfert", total=None)
+        task = bar.add_task("préparation", total=None)
 
         def progress(done: int, total: int) -> None:
             bar.update(task, completed=done, total=total or None)
 
+        def on_phase(label: str) -> None:
+            bar.update(task, description=label, completed=0, total=None)
+            console.log(f"→ {label}")
+
         try:
-            return run_prepare(source, cfg, drive, progress=progress, **kwargs)
+            return run_prepare(source, cfg, drive, progress=progress, on_phase=on_phase, **kwargs)
         except PrepareError as exc:
             console.print(f"[red]prepare :[/] {exc}")
             raise typer.Exit(1) from None
@@ -251,6 +255,8 @@ def render(
     selected = doc.get("moments", [])
     if only is not None:
         selected = [m for m in selected if m.get("rank") == only]
+    if streamer:                                   # --streamer l'emporte sur le pseudo enregistré par le scan
+        selected = [{**m, "streamer": streamer} for m in selected]
     cfg["job"] = {"video_id": doc.get("video_id"), "streamer": streamer or doc.get("streamer")}
     try:
         clips = run_render(selected, str(video), str(output_dir), cfg)

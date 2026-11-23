@@ -174,3 +174,22 @@ def test_one_bad_moment_does_not_block_others(tmp_path, source):
 def test_render_missing_video_and_empty(tmp_path):
     with pytest.raises(FileNotFoundError):
         R.render([_moment()], str(tmp_path / "nope.mp4"), str(tmp_path), {})
+
+
+def test_hook_moves_below_a_face_in_the_top_band():
+    lay = R.Layout("center", track=[(0, 0.5)])
+    face_top = [R.FaceSample(i, [(0.52, 0.12, 0.06, 0.09, 0.9)]) for i in range(10)]   # webcam en haut, centrée
+    y = R.hook_y_ratio(face_top, lay, src_aspect=16 / 9, out_aspect=9 / 16, default=0.2)
+    assert y > 0.12 + 2.2 * 0.09 and y <= 0.5
+    face_bottom = [R.FaceSample(i, [(0.5, 0.8, 0.06, 0.09, 0.9)]) for i in range(10)]
+    assert R.hook_y_ratio(face_bottom, lay, src_aspect=16 / 9, out_aspect=9 / 16, default=0.2) == 0.2
+    outside = [R.FaceSample(i, [(0.95, 0.12, 0.06, 0.09, 0.9)]) for i in range(10)]     # hors du recadrage
+    assert R.hook_y_ratio(outside, lay, src_aspect=16 / 9, out_aspect=9 / 16, default=0.2) == 0.2
+    assert R.hook_y_ratio(face_top, R.Layout("facecam", (0.7, 0.7, 0.3, 0.3)), src_aspect=16 / 9,
+                          out_aspect=9 / 16, default=0.2) == 0.2
+    assert R.hook_y_ratio([], lay, src_aspect=16 / 9, out_aspect=9 / 16, default=0.2) == 0.2
+
+
+def test_bigger_hook_by_default():
+    ass = R.build_ass(words=[], clip_start=0, clip_duration=10, rcfg={"width": 1080, "height": 1920}, hook="Wait")
+    assert "Style: Hook,Montserrat ExtraBold,92," in ass
