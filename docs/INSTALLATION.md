@@ -478,6 +478,17 @@ clipgod bestof --viral   # Top 5 classé par vues des Shorts -> output\bestof\
 Un Short dont la VOD d'origine est introuvable (pas de lien, VOD supprimée, Short accéléré…) est ignoré :
 `clipgod viral` en examine jusqu'à 25 pour en garder 5. Réglages : section `viral` de `config.yaml`.
 
+**Avec tes propres vidéos** : dépose-les dans le dossier `bestof\` (à la racine de `clipgod`), nommées dans
+l'ordre du classement (`1 - ….mp4` = n°1). Un `@pseudo` dans le nom sert de crédit (`1 - @KaiCenat crash.mp4`).
+
+```powershell
+clipgod bestof --folder bestof --plan   # vérifie l'ordre et les durées
+clipgod bestof --folder bestof          # -> output\bestof\TOP5_<date>.mp4 + .txt ; vidéos rangées dans bestof\publies\<date>\
+```
+
+Chaque vidéo est coupée à 30 s maximum (`bestof.folder_max_clip_seconds`). La tâche du matin utilise
+automatiquement ce dossier dès qu'il contient au moins 2 vidéos.
+
 **À la main**, sans tâche planifiée :
 
 ```powershell

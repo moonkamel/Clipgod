@@ -3,7 +3,8 @@
 
   1. met à jour ClipGod (git pull) ;
   2. récupère les clips traités la veille sur Colab (clipgod sync) ;
-  3. monte le Top 5 du jour s'il y a assez de nouveaux moments
+  3. monte le Top 5 du jour : avec les vidéos du dossier bestof\ s'il en contient au moins 2
+     (clipgod bestof --folder bestof), sinon avec les nouveaux moments ClipGod
      (mode viral : clipgod bestof --viral, classé par vues des Shorts ; sinon clipgod bestof) ;
   4. prépare la fournée suivante pour Colab :
      mode viral    -> clipgod viral (Shorts les plus vus -> même moment dans la VOD d'origine) ;
@@ -42,7 +43,13 @@ try {
     clipgod sync
 
     Write-Host "`n=== 3/4 Top 5 du jour ===" -ForegroundColor Cyan
-    if ($Mode -eq "viral") { clipgod bestof --viral --no-open } else { clipgod bestof --no-open }
+    $mine = Get-ChildItem -Path (Join-Path $root "bestof") -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in ".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi" }
+    if ($mine.Count -ge 2) {
+        Write-Host "Dossier bestof : $($mine.Count) vidéo(s) -> compilation" -ForegroundColor Green
+        clipgod bestof --folder bestof --no-open
+    }
+    elseif ($Mode -eq "viral") { clipgod bestof --viral --no-open } else { clipgod bestof --no-open }
     if ($LASTEXITCODE -ne 0) { Write-Host "Pas de best-of aujourd'hui (pas assez de nouveaux moments)." -ForegroundColor Yellow }
     else { Start-Process (Join-Path $root "output\bestof") }
 

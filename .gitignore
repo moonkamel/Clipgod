@@ -37,3 +37,6 @@ report.html
 *.mp4
 *.mkv
 *.ts
+
+# Vidéos déposées pour clipgod bestof --folder (jamais versionnées)
+/bestof/

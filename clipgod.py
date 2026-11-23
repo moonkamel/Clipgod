@@ -613,6 +613,9 @@ def bestof(
     open_folder: bool = typer.Option(True, "--open/--no-open", help="Ouvre le dossier à la fin."),
     viral: bool = typer.Option(False, "--viral", help="Moments préparés par clipgod viral, classés par vues "
                                "du Short d'origine."),
+    folder: Optional[Path] = typer.Option(None, "--folder", "-f", help="Compile les vidéos de ce dossier (ordre des "
+                                          "noms = classement, 1er fichier = n°1), puis les range dans publies/<date>."),
+    keep: bool = typer.Option(False, "--keep", help="Avec --folder : laisse les vidéos dans le dossier."),
 ) -> None:
     """Top 5 GTA 6 du jour : compilation verticale #5 -> #1 des meilleurs moments récents + légende."""
     from rich.table import Table
@@ -620,6 +623,18 @@ def bestof(
     from modules.bestof import BestOfError, make_bestof, select_picks
 
     cfg = ctx.obj["config"]
+    if folder is not None and (plan_only or ctx.obj.get("dry_run")):
+        from modules.bestof import picks_from_folder
+
+        try:
+            picks = picks_from_folder(folder)
+        except BestOfError as exc:
+            console.print(f"[red]bestof :[/] {exc}")
+            raise typer.Exit(1) from None
+        for p in picks:
+            console.print(f"  #{p.rank}  {p.path.name}  [dim]{p.duration:.0f} s"
+                          f"{'' if p.meta.get('has_audio') else ' · sans son'}[/]")
+        return
     if plan_only or ctx.obj.get("dry_run"):
         picks = select_picks(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None, viral=viral)
         table = Table(title=f"Sélection du best-of ({len(picks)} moments)")
@@ -632,12 +647,15 @@ def bestof(
         console.print(table)
         return
     try:
-        result = make_bestof(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None, viral=viral)
+        result = make_bestof(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None, viral=viral,
+                             folder=folder, archive=not keep)
     except BestOfError as exc:
         console.print(f"[red]bestof :[/] {exc}")
         raise typer.Exit(1) from None
     for p in sorted(result.picks, key=lambda p: -p.rank):
-        console.print(f"  #{p.rank}  @{p.streamer}  [dim]{p.use_seconds:.0f} s · score {p.score:.0f}[/]  "
+        label = p.path.name if folder is not None else f"@{p.streamer}"
+        extra = "" if folder is not None else f" · score {p.score:.0f}"
+        console.print(f"  #{p.rank}  {label}  [dim]{p.use_seconds:.0f} s{extra}[/]  "
                       f"{p.meta.get('hook') or ''}")
     console.print(f"\n[bold green]✔ {result.video.name}[/] ({result.duration:.0f} s) + {result.caption_file.name} "
                   f"dans {result.video.parent}")
