@@ -320,6 +320,13 @@ viral:
     exclude: []                     # vide = liste par défaut (GAMEPLAY_EXCLUDE : réaction, comparaison, news…)
 
 # ---------------------------------------------------------------------
+# Veille TikTok (laptop) : clipgod toptiktok -> top10_tiktok_gta6.txt
+# ---------------------------------------------------------------------
+tiktok_top:
+  tags: [gta6, gtavi, gta6gameplay]  # pages tiktok.com/tag/<hashtag> lues
+  scrolls: 8                        # défilements par page (~30-60 vidéos par hashtag)
+
+# ---------------------------------------------------------------------
 # Best-of quotidien (laptop) : « Top 5 GTA 6 du jour » -> output/bestof/
 # ---------------------------------------------------------------------
 bestof:

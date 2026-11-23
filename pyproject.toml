@@ -46,6 +46,10 @@ cloud = [
 tts = [
     "piper-tts>=1.2",
 ]
+# Veille TikTok (clipgod toptiktok) : pilote le Chrome / Edge déjà installé (aucun navigateur téléchargé).
+trends = [
+    "playwright>=1.44",
+]
 # Module watch (buffer live). Optionnel : consomme de la bande passante.
 watch = [
     "streamlink>=6.8",
