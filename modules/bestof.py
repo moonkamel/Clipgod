@@ -103,8 +103,11 @@ def _recent(meta: Mapping[str, Any], entry: Mapping[str, Any], since: datetime) 
 
 
 def select_picks(cfg: Mapping[str, Any], *, now: datetime | None = None, count: int | None = None,
-                 hours: float | None = None, allow_repeat: bool | None = None) -> list[Pick]:
-    """Les meilleurs moments récents, une variante chacun, classés (rang 1 = meilleur score)."""
+                 hours: float | None = None, allow_repeat: bool | None = None, viral: bool = False) -> list[Pick]:
+    """Les meilleurs moments récents, une variante chacun, classés (rang 1 = meilleur score).
+
+    ``viral`` : seulement les moments issus de ``clipgod viral``, classés par vues du Short d'origine.
+    """
     from modules.manual import hook_quality
 
     bcfg = get(cfg, "bestof", {}) or {}
@@ -127,6 +130,8 @@ def select_picks(cfg: Mapping[str, Any], *, now: datetime | None = None, count: 
             continue
         meta = read_json(p.with_suffix(".json"), default={}) or {}
         pick = Pick(clip_id, p, meta, float(meta.get("duration") or entry.get("duration") or 0))
+        if viral and not meta.get("viral"):
+            continue
         if pick.duration <= 3 or pick.group in used or not _recent(meta, entry, since):
             continue
         lang = langs.get(str(meta.get("video_id")))
@@ -143,7 +148,10 @@ def select_picks(cfg: Mapping[str, Any], *, now: datetime | None = None, count: 
 
     per_streamer: dict[str, int] = {}
     chosen: list[Pick] = []
-    for pick in sorted(best.values(), key=lambda p: (-p.score, p.group)):
+    def order(p: Pick) -> tuple[float, str]:
+        return (-float((p.meta.get("viral") or {}).get("views") or 0) if viral else -p.score, p.group)
+
+    for pick in sorted(best.values(), key=order):
         key = pick.streamer.lower()
         if per_streamer.get(key, 0) >= int(bcfg.get("max_per_streamer", 2)):
             continue
@@ -266,18 +274,19 @@ def build_caption(picks: Sequence[Pick], cfg: Mapping[str, Any], *, lang: str, d
 
 def make_bestof(cfg: Mapping[str, Any], *, now: datetime | None = None, count: int | None = None,
                 hours: float | None = None, allow_repeat: bool | None = None, output_dir: str | Path | None = None,
-                record: bool = True) -> BestOf:
+                record: bool = True, viral: bool = False) -> BestOf:
     """Sélectionne, monte et enregistre le best-of du jour. Lève :class:`BestOfError` s'il manque des moments."""
     from modules.render import _ffmpeg, _run, audio_args, encoder_args, ensure_font
 
     bcfg = get(cfg, "bestof", {}) or {}
     rcfg: Mapping[str, Any] = cfg.get("render") or {}
     now = now or utc_now()
-    picks = select_picks(cfg, now=now, count=count, hours=hours, allow_repeat=allow_repeat)
+    picks = select_picks(cfg, now=now, count=count, hours=hours, allow_repeat=allow_repeat, viral=viral)
     minimum = int(bcfg.get("min_count", 3))
     if len(picks) < minimum:
-        raise BestOfError(f"Seulement {len(picks)} moment(s) récent(s) utilisable(s) (minimum {minimum}). "
-                          "Traitez d'autres VODs (clipgod discover --trending --prepare 2) puis clipgod sync.")
+        hint = ("Lancez clipgod viral, puis Colab (Tout exécuter), puis clipgod sync." if viral else
+                "Traitez d'autres VODs (clipgod discover --trending --prepare 2) puis clipgod sync.")
+        raise BestOfError(f"Seulement {len(picks)} moment(s) récent(s) utilisable(s) (minimum {minimum}). {hint}")
     intro, card = float(bcfg.get("intro_seconds", 1.6)), float(bcfg.get("card_seconds", 0.9))
     plan_durations(picks, max_clip=float(bcfg.get("max_clip_seconds", 18)),
                    target_total=float(bcfg.get("target_seconds", 95)), intro=intro, card=card)

@@ -3,9 +3,11 @@
 
   1. met à jour ClipGod (git pull) ;
   2. récupère les clips traités la veille sur Colab (clipgod sync) ;
-  3. monte le best-of du jour s'il y a assez de nouveaux moments (clipgod bestof) ;
-  4. repère ce qui buzze et prépare les VODs d'origine pour le prochain passage Colab
-     (clipgod discover --trending --prepare N, téléchargement fait par le notebook) ;
+  3. monte le Top 5 du jour s'il y a assez de nouveaux moments
+     (mode viral : clipgod bestof --viral, classé par vues des Shorts ; sinon clipgod bestof) ;
+  4. prépare la fournée suivante pour Colab :
+     mode viral    -> clipgod viral (Shorts les plus vus -> même moment dans la VOD d'origine) ;
+     mode trending -> clipgod discover --trending --prepare N (VODs entières) ;
   5. ouvre Colab : il ne reste qu'à cliquer sur Exécution > Tout exécuter.
 
   Lancement manuel :   powershell -ExecutionPolicy Bypass -File scripts\daily.ps1
@@ -13,7 +15,9 @@
   Journal :            logs\daily_<date>.txt
 #>
 param(
-    [int]$Prepare = 2,          # VODs d'origine à préparer chaque jour
+    [ValidateSet("viral", "trending")]
+    [string]$Mode = "viral",    # viral : Top 5 des Shorts les plus vus ; trending : meilleures VODs du jour
+    [int]$Prepare = 2,          # mode trending : VODs entières à préparer chaque jour
     [switch]$NoColab,           # ne pas ouvrir Colab à la fin
     [switch]$NoPull             # ne pas faire git pull
 )
@@ -38,12 +42,12 @@ try {
     clipgod sync
 
     Write-Host "`n=== 3/4 Top 5 du jour ===" -ForegroundColor Cyan
-    clipgod bestof --no-open
+    if ($Mode -eq "viral") { clipgod bestof --viral --no-open } else { clipgod bestof --no-open }
     if ($LASTEXITCODE -ne 0) { Write-Host "Pas de best-of aujourd'hui (pas assez de nouveaux moments)." -ForegroundColor Yellow }
     else { Start-Process (Join-Path $root "output\bestof") }
 
-    Write-Host "`n=== 4/4 Ce qui buzze -> VODs à traiter ===" -ForegroundColor Cyan
-    clipgod discover --trending --prepare $Prepare
+    Write-Host "`n=== 4/4 Moments à traiter sur Colab ===" -ForegroundColor Cyan
+    if ($Mode -eq "viral") { clipgod viral } else { clipgod discover --trending --prepare $Prepare }
 
     if (-not $NoColab) {
         $url = python -c "from core.config import load_config; from modules.prepare import colab_url; print(colab_url(load_config(None)))"

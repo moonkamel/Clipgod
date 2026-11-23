@@ -446,8 +446,8 @@ Le cycle quotidien tient en une tâche planifiée et un clic sur Colab :
 
 | Moment | Où | Ce qui se passe |
 |---|---|---|
-| Le matin (tâche planifiée) | PC | `git pull` → `clipgod sync` (clips de la veille) → `clipgod bestof` (le Top 5 du jour) → `clipgod discover --trending --prepare 2` (ce qui buzze) → Colab s'ouvre |
-| Juste après | Colab | **Exécution › Tout exécuter**, onglet ouvert jusqu'à la fin (~30-60 min pour 2 VODs) |
+| Le matin (tâche planifiée) | PC | `git pull` → `clipgod sync` (clips de la veille) → `clipgod bestof --viral` (le Top 5 du jour) → `clipgod viral` (les moments des Shorts les plus vus) → Colab s'ouvre |
+| Juste après | Colab | **Exécution › Tout exécuter**, onglet ouvert jusqu'à la fin (~10 min pour 5 extraits) |
 | Le lendemain matin | PC | la tâche récupère ces clips et monte le Top 5 suivant |
 
 **Installer la tâche** (une seule fois, dans PowerShell, depuis le dossier `clipgod`) :
@@ -456,9 +456,27 @@ Le cycle quotidien tient en une tâche planifiée et un clic sur Colab :
 powershell -ExecutionPolicy Bypass -File scripts\install_daily_task.ps1 -At 09:15
 ```
 
+(`-Mode trending` pour l'ancien fonctionnement : VODs entières du jour, analysées de bout en bout.)
+
 Si le PC est éteint à l'heure prévue, la tâche part au démarrage suivant. Pour la lancer tout de suite :
 `Start-ScheduledTask -TaskName "ClipGod quotidien"`. Journal : `logs\daily_<date>.txt`.
 Pour la supprimer : `Unregister-ScheduledTask -TaskName "ClipGod quotidien" -Confirm:$false`.
+
+**Mode viral (par défaut)** : le Top 5 reprend les moments des **Shorts GTA 6 les plus vus** des dernières 24 h,
+classés par vues. Pour chaque Short, `clipgod viral` retrouve la VOD d'origine (lien de la description, même chaîne,
+@mention), écoute sa piste audio pour localiser **la seconde exacte** du moment (empreinte audio), puis télécharge
+seulement les ~30-50 s utiles et les dépose sur Drive. Colab les sous-titre et les monte en 1-2 min chacun.
+Le Short lui-même n'est jamais réutilisé dans le montage.
+
+```powershell
+clipgod viral --plan     # localise les moments sans rien envoyer (pour voir)
+clipgod viral            # localise + envoie les extraits sur Drive -> Colab : Tout exécuter
+clipgod sync
+clipgod bestof --viral   # Top 5 classé par vues des Shorts -> output\bestof\
+```
+
+Un Short dont la VOD d'origine est introuvable (pas de lien, VOD supprimée, Short accéléré…) est ignoré :
+`clipgod viral` en examine jusqu'à 25 pour en garder 5. Réglages : section `viral` de `config.yaml`.
 
 **À la main**, sans tâche planifiée :
 

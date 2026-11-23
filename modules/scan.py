@@ -936,6 +936,40 @@ def _round_list(arr: np.ndarray, digits: int = 3) -> list[float]:
     return [round(float(x), digits) for x in arr]
 
 
+def fixed_moment(job: Mapping[str, Any], transcript: Mapping[str, Any] | None, duration: float,
+                 scfg: Mapping[str, Any], video_id: str) -> dict[str, Any]:
+    """Moment imposé par le job (``fixed_moment: {start, end, score}``) : bornes recalées hors des mots, hooks."""
+    fm = job["fixed_moment"]
+    a = max(0.0, float(fm.get("start", 0.0)))
+    b = min(duration, float(fm.get("end", duration)))
+    words = words_from_transcript(transcript) if transcript and transcript.get("segments") else []
+    for w in words:                                   # jamais en plein mot
+        if w["start"] < b < w["end"]:
+            b = min(duration, w["end"] + 0.1)
+            break
+    for w in words:
+        if w["start"] < a < w["end"]:
+            a = max(0.0, w["start"] - 0.1)
+            break
+    moment_words = [{"start": round(w["start"], 3), "end": round(w["end"], 3), "word": w["word"]}
+                    for w in words if w["end"] > a and w["start"] < b]
+    text = _words_to_text(moment_words)
+    streamer = job.get("streamer")
+    lang = scfg.get("hook_language") or "en"
+    viral = job.get("viral") or {}
+    return {
+        "idx": 0, "rank": 1, "video_id": video_id, "streamer": streamer,
+        "start": round(a, 2), "end": round(b, 2), "duration": round(b - a, 2), "peak": round((a + b) / 2, 2),
+        "score": float(fm.get("score", 80.0)),
+        "hooks": generate_hooks(transcript=text, signals={}, weights={}, keywords=[], streamer=streamer,
+                                n=int(scfg.get("hooks_per_moment", 3)), max_chars=int(scfg.get("hook_max_chars", 60)),
+                                lang=lang, seed=f"{video_id}:{a}"),
+        "reason": f"moment viral ({int(viral.get('views') or 0):,} vues sur un Short)".replace(",", " "),
+        "signals": {}, "keywords": [], "transcript": text, "words": moment_words,
+        "cutscene": None, "viral": viral or None,
+    }
+
+
 def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
     """Analyse une vidéo et écrit ``<output_dir>/<video_id>.json``. Retourne les ``top_k`` moments.
 
@@ -991,6 +1025,19 @@ def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
                             exc_info=True)
         if transcript is not None:
             write_json(out_dir / f"{video_id}.transcript.json", transcript, indent=None)
+
+        # -- moment déjà localisé (bestof --viral : extrait d'une VOD autour d'un moment viral) ----
+        if job.get("fixed_moment"):
+            moment = fixed_moment(job, transcript, duration, scfg, video_id)
+            doc = {"format": SCAN_FORMAT, "video_id": video_id, "job_id": job.get("job_id"),
+                   "source": job.get("source_url") or str(video), "streamer": job.get("streamer"),
+                   "duration": round(duration, 2), "generated_at": utc_now_iso(), "scorer": {"name": "viral"},
+                   "signals_available": [], "transcript_model": (transcript or {}).get("model"),
+                   "language": (transcript or {}).get("language"), "windows_evaluated": 0,
+                   "moments": [moment], "candidates": []}
+            write_json(out_dir / f"{video_id}.json", doc)
+            summary.update(moments=1, best_score=moment["score"], fixed=True)
+            return [moment]
 
         # -- audio / visuel / most replayed ----------------------------------
         loud = None

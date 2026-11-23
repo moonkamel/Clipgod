@@ -1,16 +1,18 @@
 ﻿<#
   Installe (ou remplace) la tâche planifiée Windows « ClipGod quotidien ».
-  Usage : powershell -ExecutionPolicy Bypass -File scripts\install_daily_task.ps1 [-At 09:15] [-Prepare 2]
+  Usage : powershell -ExecutionPolicy Bypass -File scripts\install_daily_task.ps1 [-At 09:15] [-Mode viral|trending]
   Suppression : Unregister-ScheduledTask -TaskName "ClipGod quotidien" -Confirm:$false
 #>
 param(
     [string]$At = "09:15",
+    [ValidateSet("viral", "trending")]
+    [string]$Mode = "viral",
     [int]$Prepare = 2
 )
 $root = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $root "scripts\daily.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -Prepare $Prepare" -WorkingDirectory $root
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -Mode $Mode -Prepare $Prepare" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -Daily -At $At
 # StartWhenAvailable : si le PC était éteint à l'heure prévue, la tâche part au démarrage suivant.
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `

@@ -242,11 +242,19 @@ def prepare(
     on_phase: Callable[[str], None] | None = None,
     probe: Callable[[str], dict[str, Any]] = probe_url,
     downloader: Callable[..., Path] = download_url,
+    video_id: str | None = None,
+    extra_job: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Prépare un job et le dépose sur Drive. Retourne le job écrit (avec ``_existing`` si dédoublonné)."""
+    """Prépare un job et le dépose sur Drive. Retourne le job écrit (avec ``_existing`` si dédoublonné).
+
+    ``video_id`` force l'identifiant (extraits « viral ») ; ``extra_job`` est fusionné dans le job
+    (ex. ``fixed_moment``, ``viral``, ``source_url`` de la VOD d'origine).
+    """
     pcfg = cfg.get("prepare") or {}
     state = StateStore(path(cfg, "state"))
     src = resolve_source(source, streamer=streamer, probe=probe)
+    if video_id:
+        src.video_id = video_id
     log.info("Source : %s (%s) %s", src.video_id, src.platform, src.title or "")
 
     drive.ensure_structure()
@@ -299,6 +307,7 @@ def prepare(
         "created_at": utc_now_iso(),
         "created_by": "clipgod prepare",
         "config": job_config(cfg),
+        **dict(extra_job or {}),
     }
     drive.write_json(drive.remote("jobs", f"{jid}.json"), job)
     state.upsert_job(jid, status="queued", video_id=src.video_id, platform=src.platform, source=source,
