@@ -355,7 +355,7 @@ def test_adaptive_bounds_snaps_to_sentences():
     curve[50:58] = 4.0
     # phrase qui commence à 46.2 (après un silence) et se termine à 60.4 (pause ensuite)
     words = _words((40.0, 40.5), (46.2, 46.6), (47.0, 59.0), (59.1, 60.4), (62.0, 62.5))
-    a, b = M.adaptive_bounds(curve, 54.5, words, clip_min=12, clip_max=29.5, duration=200)
+    a, b = M.adaptive_bounds(curve, 54.5, words, clip_min=12, clip_max=29.5, duration=200, setup=3.0, tail=1.5)
     assert a == pytest.approx(46.05)
     assert b == pytest.approx(60.65)
     assert not any(w["start"] < b < w["end"] for w in words)

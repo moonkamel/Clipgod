@@ -17,6 +17,7 @@ paths:
   cache: cache
   logs: logs
   sources_json: data/sources.json
+  trending: data/trending.json       # clipgod discover --trending : Shorts viraux du jour
   campaigns_txt: data/campaigns.txt
   historical_scores: data/historical_scores.csv
   model: data/model.pkl
@@ -78,6 +79,13 @@ discover:
     search_vods: true               # 1 search.list = 100 unités
     max_units_per_run: 300
     daily_budget: 1500              # part du quota (10 000/j) réservée à discover ; le reste va aux uploads
+  trending:                         # clipgod discover --trending : ce qui buzze sur GTA 6
+    hours: 24                       # Shorts / VODs publiés depuis N heures
+    results: 25                     # résultats par recherche (Shorts, puis vidéos longues)
+    hot_channels: 5                 # chaînes aux Shorts viraux dont on cherche les VODs d'origine
+    uploads_per_channel: 8
+    max_vod_age_hours: 48           # une VOD d'origine peut dater de la veille
+    max_units: 400                  # plafond de quota YouTube par run (~220 en pratique)
   kick:
     channels: []                    # slugs suivis en plus de campaigns.txt (kick:<slug>)
     videos_per_channel: 5
@@ -147,9 +155,9 @@ scan:
   clip_max_seconds: null            # défaut : monetize max - 0,5 (strictement < 30 s)
   duration:                         # durée de chaque clip
     mode: adaptive                  # adaptive = ajustée à la séquence (mise en place + action + réaction) | window
-    min_seconds: 12                 # plancher (le plafond reste clip_max_seconds)
-    setup: 3.0                      # secondes gardées avant le début de l'action
-    tail: 1.5                       # secondes gardées après la retombée (réaction)
+    min_seconds: 20                 # plancher (le plafond reste clip_max_seconds)
+    setup: 5.0                      # secondes gardées avant le début de l'action (contexte)
+    tail: 3.0                       # secondes gardées après la retombée (réaction)
     rel_threshold: 0.35             # part du pic au-dessus de laquelle la séquence est « active »
     quiet: 2                        # secondes calmes consécutives qui terminent la séquence
   cutscene:                         # cinématiques (bandes noires) : pas de réaction du streamer, droits Rockstar
@@ -290,6 +298,24 @@ publish:
   env:
     upload_post_api_key: UPLOAD_POST_API_KEY
     youtube_client_secrets: YOUTUBE_CLIENT_SECRETS
+
+# ---------------------------------------------------------------------
+# Best-of quotidien (laptop) : « Top 5 GTA 6 du jour » -> output/bestof/
+# ---------------------------------------------------------------------
+bestof:
+  count: 5                          # moments par best-of (compte à rebours #5 -> #1)
+  min_count: 3                      # en dessous, pas de best-of (traiter d'autres VODs)
+  hours: 48                         # moments rendus depuis N heures
+  allow_repeat: false               # un moment déjà utilisé dans un best-of n'y revient pas
+  max_per_streamer: 2               # variété : au plus 2 moments du même streamer
+  max_cutscene: 0.5                 # moments à plus de 50 % de cinématique écartés
+  max_clip_seconds: 18              # durée gardée par moment (on coupe la fin)
+  target_seconds: 95                # durée totale visée (cartes comprises)
+  intro_seconds: 1.6                # carte titre « TOP 5 GTA 6 … »
+  card_seconds: 0.9                 # carte « #N @streamer » avant chaque moment
+  language: null                    # en | fr ; défaut : scan.hook_language
+  output_dir: output/bestof
+  hashtags: ["#gta6", "#gtavi", "#gta", "#gaming", "#top5", "#fyp"]
 
 # ---------------------------------------------------------------------
 # Module 6 — monetize (laptop)

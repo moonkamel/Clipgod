@@ -389,6 +389,22 @@ Enchaîne `discover` + `prepare`, puis affiche :
 → Une fois terminé, lancez : clipgod sync
 ```
 
+### Top 5 GTA 6 du jour — `bestof` + `discover --trending`
+
+```bash
+clipgod discover --trending --prepare 2   # Shorts GTA 6 viraux des 24 h -> leurs VODs d'origine -> jobs Drive
+clipgod bestof                            # compilation #5 -> #1 des meilleurs moments des 48 h + légende
+```
+
+- **Tendances** (YouTube Data API, ~220 unités) : Shorts les plus vus des dernières 24 h, vidéos longues du jour,
+  puis dernières VODs des chaînes dont les Shorts explosent (boost vues/heure). Les Shorts des autres ne sont
+  jamais republiés : ils servent de signal, le moment est recoupé dans la VOD d'origine (« most replayed » aide).
+- **Best-of** : une variante par moment, sans cinématiques, ≤ 2 moments par streamer, jamais deux fois le même
+  moment ; carte titre, cartes « #N @streamer » sur fond flouté, badge pendant chaque moment ; ~90 s.
+  Sortie : `output/bestof/TOP5_<date>.mp4` + `.txt` (classement, crédits, hashtags).
+- **Chaque matin** : `scripts/daily.ps1` (sync → bestof → tendances → Colab), installé comme tâche planifiée
+  Windows par `scripts/install_daily_task.ps1`. Seul le clic « Tout exécuter » sur Colab reste manuel.
+
 ### Mode live (optionnel) — `watch`
 
 Désactivé par défaut (`watch.disable-watch: true`) car il télécharge le live en continu. Il nécessite l'extra
@@ -433,7 +449,7 @@ clipgod watch <url> --force --auto-prepare                     # envoie chaque c
 4. **Sélection** :
    - top 3 sans chevauchement (≥ 30 s d'écart) ;
    - **durée adaptée à la séquence** (`scan.duration`) : on part du pic et on garde toute la séquence intense,
-     plus 3 s de mise en place avant et 1,5 s de réaction après. Résultat : entre 12 s et 29,5 s selon le moment ;
+     plus 5 s de mise en place avant et 3 s de réaction après. Résultat : entre 20 s et 29,5 s selon le moment ;
    - bornes recalées : début sur une prise de parole, fin sur une fin de phrase, jamais au milieu d'un mot ;
    - sous `scan.min_score`, le moment reste un simple candidat.
 5. **Hooks** : 3 accroches < 60 caractères par moment, générées par des templates locaux sans LLM. Pour l'A/B test : une citation du transcript, une accroche selon le thème (police, crash, fail…) et une selon le signal dominant.
