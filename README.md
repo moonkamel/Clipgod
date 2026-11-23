@@ -290,6 +290,7 @@ clipgod publish --plan          # montre le plan (validation, plateformes, crén
 clipgod publish                 # mode test (défaut) : upload YouTube en PRIVÉ, rien de public
 clipgod publish --live          # programme sur les créneaux de forte audience (max 6/jour)
 clipgod publish --live --now    # publie immédiatement (toujours plafonné à 6/jour)
+clipgod tiktok                  # TikTok gratuit : légende copiée + clip sélectionné, à déposer dans TikTok Studio
 ```
 
 1. **Validation** (module `monetize`) :
@@ -473,6 +474,7 @@ clipgod render source.mp4 -m output/moments/<video_id>.json --only 1 --layout ce
 ## Tests
 
 ```bash
+pip install -e ".[dev,cloud]"   # les tests de scan/render ont besoin des dépendances GPU
 pytest
 ```
 

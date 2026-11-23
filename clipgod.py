@@ -378,6 +378,67 @@ def publish(
         raise typer.Exit(1)
 
 
+@app.command()
+def tiktok(
+    ctx: typer.Context,
+    platform: str = typer.Option("tiktok", "--platform", "-p", help="tiktok | instagram_reels."),
+    limit: int = typer.Option(3, "--limit", "-n", help="Nombre de clips à préparer dans cette séance."),
+    schedule: bool = typer.Option(True, "--schedule/--now", help="Propose un créneau de forte audience par clip."),
+    plan_only: bool = typer.Option(False, "--plan", help="Affiche les prochains posts sans rien marquer."),
+    open_studio: bool = typer.Option(True, "--open/--no-open", help="Ouvre TikTok Studio dans le navigateur."),
+) -> None:
+    """Publication manuelle assistée : légende copiée, clip sélectionné, créneau conseillé (gratuit, sans API)."""
+    import webbrowser
+    from zoneinfo import ZoneInfo
+
+    from rich.panel import Panel
+
+    from modules.manual import STUDIO_URLS, copy_to_clipboard, plan_manual, record_manual, reveal_file
+
+    cfg = ctx.obj["config"]
+    tz = ZoneInfo(str(cfg.get("project", {}).get("timezone", "Europe/Paris")))
+    rejected: list[tuple[str, list[str]]] = []
+    posts = plan_manual(cfg, platform=platform, limit=limit, schedule=schedule, rejected=rejected)
+    for clip_id, reasons in rejected:
+        console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
+    if not posts:
+        console.print("[dim]Rien à publier : lancez clipgod sync pour récupérer de nouveaux clips.[/]")
+        return
+
+    def when(post) -> str:
+        return post.slot.astimezone(tz).strftime("%a %d/%m à %H:%M") if post.slot else "maintenant"
+
+    if plan_only or ctx.obj.get("dry_run"):
+        for i, post in enumerate(posts, 1):
+            console.print(Panel(post.caption, title=f"{i}. {post.clip.path.name} · {when(post)}", expand=False))
+        return
+
+    if open_studio and platform in STUDIO_URLS:
+        webbrowser.open(STUDIO_URLS[platform])
+    console.print(f"[bold]{len(posts)} clip(s) à déposer sur {platform}.[/] Pour chacun : glisse la vidéo, "
+                  "colle la légende (Ctrl+V), règle la date, puis reviens ici.\n")
+    done = 0
+    for i, post in enumerate(posts, 1):
+        copied = copy_to_clipboard(post.caption)
+        reveal_file(post.clip.path)
+        console.print(Panel(post.caption, expand=False,
+                            title=f"{i}/{len(posts)} · {post.clip.path.name} · score {post.clip.score:.0f}",
+                            subtitle="légende copiée ✔" if copied else "copie la légende ci-dessus"))
+        console.print(f"   📁 {post.clip.path}")
+        console.print(f"   🕒 Programmer : [bold cyan]{when(post)}[/] ({tz.key})")
+        answer = typer.prompt("   Entrée = c'est posté · colle le lien TikTok (optionnel) · s = passer · q = quitter",
+                              default="", show_default=False).strip()
+        if answer.lower() == "q":
+            break
+        if answer.lower() == "s":
+            continue
+        record_manual(cfg, post, url=answer if answer.startswith("http") else None)
+        done += 1
+        console.print("   [green]✔ enregistré[/]\n")
+    console.print(f"[bold green]{done} post(s) enregistré(s).[/] Les liens collés servent à clipgod learn "
+                  "(vues à saisir dans data/manual_views.csv).")
+
+
 # ---------------------------------------------------------------------------
 # Module 6 — monetize (laptop)
 # ---------------------------------------------------------------------------

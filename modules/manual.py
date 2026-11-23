@@ -1,0 +1,168 @@
+"""Publication manuelle assistée (laptop) : TikTok / Instagram sans API payante.
+
+``clipgod tiktok`` prépare chaque post et l'utilisateur le dépose lui-même dans TikTok Studio
+(https://www.tiktok.com/tiktokstudio/upload, programmation jusqu'à 10 jours à l'avance) :
+
+    1. plan      mêmes candidats que ``publish`` (validation monetize, règles de campagne), meilleurs moments
+                 d'abord, créneaux de forte audience, ``publish.manual.max_per_day`` posts par jour ;
+    2. post      la légende (hook, crédit du streamer, hashtags) est copiée dans le presse-papiers et le clip est
+                 sélectionné dans l'explorateur de fichiers ;
+    3. état      une fois confirmé, le post est enregistré dans ``state["posts"]`` (backend ``manual``) : il n'est
+                 jamais reproposé, et son lien éventuel sert à ``learn`` (via ``data/manual_views.csv``).
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from core.config import get, path
+from core.logger import get_logger
+from core.storage import StateStore, utc_now, utc_now_iso
+from modules.publish import (
+    PUBLISHED_STATES,
+    ClipInfo,
+    _parse,
+    next_slots,
+    plan_posts,
+    slot_times,
+    validated_candidates,
+)
+
+log = get_logger(__name__)
+
+STUDIO_URLS = {"tiktok": "https://www.tiktok.com/tiktokstudio/upload",
+               "instagram_reels": "https://www.instagram.com/"}
+DEFAULT_HASHTAGS = {"tiktok": ["#gta6", "#gtavi", "#gta", "#gaming", "#fyp"],
+                    "instagram_reels": ["#gta6", "#gtavi", "#gta", "#gaming", "#reels"]}
+
+
+@dataclass
+class ManualPost:
+    clip: ClipInfo
+    platform: str
+    slot: datetime | None
+    caption: str
+
+    @property
+    def post_id(self) -> str:
+        return f"{self.clip.clip_id}@{self.platform}"
+
+
+def build_caption(clip: ClipInfo, cfg: Mapping[str, Any], platform: str = "tiktok") -> str:
+    """Légende prête à coller : hook, crédit du streamer, mentions et hashtags (campagne d'abord)."""
+    mcfg = get(cfg, "publish.manual", {}) or {}
+    required = list(clip.rules.required_hashtags) if clip.rules else []
+    mentions = list(clip.rules.required_mentions) if clip.rules else []
+    base = (mcfg.get("hashtags") or {}).get(platform) if isinstance(mcfg.get("hashtags"), Mapping) else None
+    hashtags = list(dict.fromkeys([*required, *(base or DEFAULT_HASHTAGS.get(platform, DEFAULT_HASHTAGS["tiktok"]))]))
+    hook = re.sub(r"\s+", " ", str(clip.meta.get("hook") or "GTA 6 moment")).strip()
+    streamer = str(clip.meta.get("streamer") or "").lstrip("@")
+    template = str(get(cfg, "publish.credit_template", "🎮 Credit: @{streamer}"))
+    credit = template.format(streamer=streamer) if streamer else ""
+    lines = [hook, "", credit, " ".join(mentions), "", " ".join(hashtags)]
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:2200]                                             # limite TikTok
+
+
+def _manual_posts(state: StateStore, platform: str) -> dict[str, dict[str, Any]]:
+    return {pid: p for pid, p in state.load().get("posts", {}).items() if p.get("platform") == platform}
+
+
+def plan_manual(cfg: Mapping[str, Any], *, platform: str = "tiktok", limit: int | None = None,
+                schedule: bool = True, now: datetime | None = None,
+                rejected: list[tuple[str, list[str]]] | None = None) -> list[ManualPost]:
+    """Prochains posts à déposer à la main sur ``platform`` (un clip déjà posté n'est jamais reproposé)."""
+    mcfg = get(cfg, "publish.manual", {}) or {}
+    state = StateStore(path(cfg, "state"))
+    tz = ZoneInfo(str(get(cfg, "project.timezone", "Europe/Paris")))
+    now = now or utc_now()
+    # Un clip déjà posté ailleurs (YouTube…) reste candidat pour cette plateforme.
+    candidates = validated_candidates(cfg, state, rejected=rejected,
+                                      statuses=("synced", "validated", "scheduled", "published"))
+    posts = _manual_posts(state, platform)
+    already = {pid for pid, p in state.load().get("posts", {}).items() if p.get("status") in (*PUBLISHED_STATES,
+                                                                                               "private")}
+    # Sur un compte manuel, une seule variante A/B par moment (la meilleure) : pas de doublons visibles.
+    seen_groups = {p.get("group") for p in posts.values()}
+    plan = [(c, p) for c, p in plan_posts(candidates, [platform], already=already) if c.group not in seen_groups]
+    best: dict[str, tuple[ClipInfo, str]] = {}
+    for c, p in plan:
+        best.setdefault(c.group, (c, p))
+    plan = list(best.values())
+    if limit is not None:
+        plan = plan[: max(0, limit)]
+    if schedule:
+        taken = [t for p in posts.values() if p.get("slot") and (t := _parse(p["slot"])) and t > now]
+        slots: Sequence[datetime | None] = next_slots(
+            len(plan), now=now, tz=tz, times=slot_times(get(cfg, "publish", {}) or {}),
+            max_per_day=int(mcfg.get("max_per_day", 3)), taken=taken,
+            horizon_days=int(mcfg.get("horizon_days", 10)))
+        plan = plan[: len(slots)]
+    else:
+        slots = [None] * len(plan)
+    return [ManualPost(c, p, s, build_caption(c, cfg, p)) for (c, p), s in zip(plan, slots, strict=False)]
+
+
+def record_manual(cfg: Mapping[str, Any], post: ManualPost, *, url: str | None = None) -> dict[str, Any]:
+    """Enregistre un post déposé à la main (statut ``scheduled`` si créneau futur, sinon ``published``)."""
+    state = StateStore(path(cfg, "state"))
+    status = "scheduled" if post.slot else "published"
+    entry = {"clip_id": post.clip.clip_id, "platform": post.platform, "backend": "manual",
+             "slot": post.slot.isoformat() if post.slot else None, "status": status, "remote_id": None,
+             "url": url or None, "privacy": "public", "test": False, "title": post.caption.split("\n", 1)[0],
+             "hook": post.clip.meta.get("hook"), "variant": post.clip.variant, "group": post.clip.group,
+             "campaign": post.clip.meta.get("campaign"), "posted_at": utc_now_iso()}
+    with state.transaction() as data:
+        data.setdefault("posts", {})[post.post_id] = entry
+    state.upsert_clip(post.clip.clip_id, status=status, last_post=post.post_id)
+    log.info("✔ %s -> %s (manuel, %s)", post.clip.clip_id, post.platform, url or status)
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# Bureau : presse-papiers et explorateur de fichiers (best effort, jamais bloquant)
+# ---------------------------------------------------------------------------
+def copy_to_clipboard(text: str) -> bool:
+    """Copie ``text`` (emojis compris) dans le presse-papiers ; False si aucun outil n'est disponible."""
+    try:
+        if sys.platform == "win32":
+            # clip.exe lit l'UTF-16 avec BOM : c'est la seule façon fiable de garder les emojis.
+            subprocess.run(["clip"], input=text.encode("utf-16"), check=True)
+            return True
+        if sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+            return True
+        for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+            if shutil.which(cmd[0]):
+                subprocess.run(cmd, input=text.encode("utf-8"), check=True)
+                return True
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("Presse-papiers indisponible : %s", exc)
+    return False
+
+
+def reveal_file(file: Path) -> bool:
+    """Ouvre l'explorateur sur le dossier du clip, fichier sélectionné (glisser-déposer direct dans TikTok)."""
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", f"/select,{file.resolve()}"])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(file)])
+        elif shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", str(file.parent)])
+        else:
+            return False
+        return True
+    except OSError as exc:
+        log.warning("Impossible d'ouvrir l'explorateur : %s", exc)
+        return False
