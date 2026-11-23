@@ -300,6 +300,23 @@ publish:
     youtube_client_secrets: YOUTUBE_CLIENT_SECRETS
 
 # ---------------------------------------------------------------------
+# Moments viraux (laptop) : clipgod viral -> clipgod bestof --viral
+# ---------------------------------------------------------------------
+viral:
+  count: 5                          # moments à localiser et préparer par run
+  hours: 24                         # Shorts publiés depuis N heures
+  max_shorts: 25                    # Shorts examinés (les plus vus d'abord)
+  candidates_per_short: 3           # VODs d'origine essayées par Short
+  max_vod_age_days: 7               # VOD de la même chaîne publiée au plus 7 jours avant le Short
+  max_vod_downloads: 12             # pistes audio de VOD écoutées par run (~20-30 Mo chacune, puis supprimées)
+  context_before: 3.0               # secondes avant le moment du Short
+  context_after: 2.5                # secondes après (réaction)
+  max_clip_seconds: 29.0
+  download_padding: 8.0             # marge téléchargée autour de l'extrait (transcription)
+  retry_failed_after_hours: 72      # un Short introuvable n'est réessayé qu'après 3 jours
+  max_units: 400                    # quota YouTube par run
+
+# ---------------------------------------------------------------------
 # Best-of quotidien (laptop) : « Top 5 GTA 6 du jour » -> output/bestof/
 # ---------------------------------------------------------------------
 bestof:

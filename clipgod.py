@@ -573,6 +573,37 @@ def tiktok(
 
 
 @app.command()
+def viral(
+    ctx: typer.Context,
+    count: Optional[int] = typer.Option(None, "--count", "-n", help="Moments à préparer (défaut : 5)."),
+    plan_only: bool = typer.Option(False, "--plan", help="Localise les moments sans créer de jobs."),
+) -> None:
+    """Shorts GTA 6 les plus vus -> le même moment recoupé dans la VOD d'origine -> jobs Colab (bestof --viral)."""
+    from core.config import ConfigError
+    from core.drive import get_drive
+    from modules.prepare import colab_url
+    from modules.viral import ViralError, run_viral
+
+    cfg = ctx.obj["config"]
+    plan_only = plan_only or bool(ctx.obj.get("dry_run"))
+    try:
+        drive = None if plan_only else get_drive(cfg)
+        found = run_viral(cfg, drive, count=count, plan_only=plan_only, on_event=console.print)
+    except (ConfigError, ViralError) as exc:
+        console.print(f"[red]viral :[/] {exc}")
+        raise typer.Exit(1) from None
+    if not found:
+        console.print("[yellow]Aucun moment viral localisé aujourd'hui.[/] Réessaie plus tard, ou utilise "
+                      "clipgod discover --trending --prepare 2.")
+        raise typer.Exit(1)
+    console.print(f"\n[bold green]{len(found)} moment(s) viral(aux) localisé(s)[/]"
+                  + ("" if plan_only else " et envoyé(s) sur Drive."))
+    if not plan_only:
+        console.print(f"→ Colab : [bold]{colab_url(cfg)}[/] (Exécution › Tout exécuter, ~1-2 min par moment)")
+        console.print("→ Puis : [bold]clipgod sync[/] et [bold]clipgod bestof --viral[/]")
+
+
+@app.command()
 def bestof(
     ctx: typer.Context,
     count: Optional[int] = typer.Option(None, "--count", "-n", help="Nombre de moments (défaut : 5)."),
@@ -580,6 +611,8 @@ def bestof(
     allow_repeat: bool = typer.Option(False, "--allow-repeat", help="Autorise des moments déjà utilisés."),
     plan_only: bool = typer.Option(False, "--plan", help="Affiche la sélection sans monter la vidéo."),
     open_folder: bool = typer.Option(True, "--open/--no-open", help="Ouvre le dossier à la fin."),
+    viral: bool = typer.Option(False, "--viral", help="Moments préparés par clipgod viral, classés par vues "
+                               "du Short d'origine."),
 ) -> None:
     """Top 5 GTA 6 du jour : compilation verticale #5 -> #1 des meilleurs moments récents + légende."""
     from rich.table import Table
@@ -588,16 +621,18 @@ def bestof(
 
     cfg = ctx.obj["config"]
     if plan_only or ctx.obj.get("dry_run"):
-        picks = select_picks(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None)
+        picks = select_picks(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None, viral=viral)
         table = Table(title=f"Sélection du best-of ({len(picks)} moments)")
-        for col in ("rang", "clip", "streamer", "score", "hook"):
+        for col in ("rang", "clip", "streamer", "vues du Short" if viral else "score", "hook"):
             table.add_column(col, overflow="fold")
         for p in picks:
-            table.add_row(f"#{p.rank}", p.path.name, p.streamer, f"{p.score:.0f}", str(p.meta.get("hook") or ""))
+            value = f"{int((p.meta.get('viral') or {}).get('views') or 0):,}".replace(",", " ") if viral \
+                else f"{p.score:.0f}"
+            table.add_row(f"#{p.rank}", p.path.name, p.streamer, value, str(p.meta.get("hook") or ""))
         console.print(table)
         return
     try:
-        result = make_bestof(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None)
+        result = make_bestof(cfg, count=count, hours=hours, allow_repeat=allow_repeat or None, viral=viral)
     except BestOfError as exc:
         console.print(f"[red]bestof :[/] {exc}")
         raise typer.Exit(1) from None

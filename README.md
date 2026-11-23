@@ -389,7 +389,14 @@ Enchaîne `discover` + `prepare`, puis affiche :
 → Une fois terminé, lancez : clipgod sync
 ```
 
-### Top 5 GTA 6 du jour — `bestof` + `discover --trending`
+### Top 5 GTA 6 du jour — `bestof` + `viral` / `discover --trending`
+
+**Mode viral** (recommandé) : `clipgod viral` prend les Shorts GTA 6 les plus vus des 24 h, retrouve leur VOD
+d'origine (lien de la description, même chaîne, @mention) et y localise la seconde exacte du moment par
+**empreinte audio** (24 bandes, variations temporelles, corrélation FFT, consensus de 3 morceaux sur 5 : 0 faux
+positif sur nos essais). Seuls ~30-50 s de VOD sont téléchargés, puis déposés comme job `fixed_moment` : Colab
+transcrit l'extrait et monte le clip sans réanalyser la VOD. `clipgod bestof --viral` classe ensuite par vues des
+Shorts. Le Short lui-même n'est jamais réutilisé.
 
 ```bash
 clipgod discover --trending --prepare 2   # Shorts GTA 6 viraux des 24 h -> leurs VODs d'origine -> jobs Drive

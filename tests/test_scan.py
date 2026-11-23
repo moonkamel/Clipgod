@@ -401,3 +401,18 @@ def test_scan_penalizes_cutscenes(project, tmp_path):
     every = doc["moments"] + doc["candidates"]
     boxed = [m for m in every if m["start"] > 60]
     assert boxed and all(m["cutscene"] > 0.5 and m["score"] < best["score"] for m in boxed)
+
+
+@needs_media
+def test_scan_fixed_moment_skips_analysis(project, tmp_path, synthetic_video, monkeypatch):
+    """Extrait « viral » : pas d'analyse visuelle ni de scoring, un seul moment aux bornes du job."""
+    cfg = _cfg(project, tmp_path)
+    cfg["job"].update({"fixed_moment": {"start": 58.0, "end": 80.0, "score": 90}, "viral": {"views": 1234}})
+    monkeypatch.setattr(M, "visual_signals", lambda *a, **k: (_ for _ in ()).throw(AssertionError("analyse")))
+    moments = M.scan(str(synthetic_video), str(tmp_path / "m"), cfg)
+    assert len(moments) == 1
+    m = moments[0]
+    assert 57.0 <= m["start"] <= 58.0 and m["end"] >= 80.0 and m["viral"] == {"views": 1234}
+    assert len(m["hooks"]) == 3 and m["words"] and m["score"] == 90
+    doc = json.loads((tmp_path / "m" / "twitch_123.json").read_text())
+    assert doc["scorer"]["name"] == "viral" and doc["moments"][0]["viral"]["views"] == 1234
