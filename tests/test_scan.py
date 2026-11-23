@@ -189,8 +189,40 @@ class _Seg:
         self.start, self.end, self.text, self.words = s, e, text, words
 
 
-def test_transcribe_format_and_oom_fallback(monkeypatch):
+def _tiny_wav(path, seconds=1.0, rate=16000, channels=1):
+    import wave
+
+    n = int(seconds * rate)
+    samples = (np.sin(np.linspace(0, 440 * 2 * np.pi * seconds, n)) * 12000).astype("<i2")
+    if channels == 2:
+        samples = np.repeat(samples, 2)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(samples.tobytes())
+    return str(path)
+
+
+def test_load_wav_16k(tmp_path):
+    audio = M.load_wav_16k(_tiny_wav(tmp_path / "a.wav", seconds=0.5))
+    assert audio.dtype == np.float32 and audio.shape == (8000,) and 0.3 < np.abs(audio).max() <= 1.0
+    assert M.load_wav_16k(_tiny_wav(tmp_path / "s.wav", channels=2)).shape == (16000,)
+    with pytest.raises(M.ScanError, match="16 000 Hz"):
+        M.load_wav_16k(_tiny_wav(tmp_path / "b.wav", rate=44100))
+
+
+@needs_media
+def test_load_wav_from_real_extraction(tmp_path, synthetic_video):
+    wav = M.extract_audio(str(synthetic_video), tmp_path / "x.wav")
+    audio = M.load_wav_16k(str(wav))
+    assert len(audio) == pytest.approx(120 * 16000, rel=0.01)
+
+
+def test_transcribe_format_and_oom_fallback(monkeypatch, tmp_path):
     import faster_whisper
+
+    wav = _tiny_wav(tmp_path / "a.wav")
 
     loaded = []
 
@@ -202,6 +234,8 @@ def test_transcribe_format_and_oom_fallback(monkeypatch):
 
         def transcribe(self, audio, language=None, beam_size=5, vad_filter=True, word_timestamps=False,
                        condition_on_previous_text=True):
+            # Régression Colab : un chemin ferait décoder l'audio par PyAV (incompatible) -> tableau numpy requis.
+            assert isinstance(audio, np.ndarray) and audio.dtype == np.float32
             assert word_timestamps is True and condition_on_previous_text is False
             info = type("I", (), {"language": "en", "language_probability": 0.98, "duration": 10.0})()
             return iter([_Seg(0.0, 2.0, " No way! ", [_W(0.0, 0.8, " No"), _W(0.8, 1.6, " way!")])]), info
@@ -209,7 +243,7 @@ def test_transcribe_format_and_oom_fallback(monkeypatch):
     monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
     monkeypatch.setattr(M, "_cuda_device_count", lambda: 1)
     monkeypatch.setattr(M, "cuda_vram_gb", lambda: 15.0)
-    result = M.transcribe("a.wav", {"model": "auto", "batch_size": 0, "fallback_models": ["medium", "small"]})
+    result = M.transcribe(wav, {"model": "auto", "batch_size": 0, "fallback_models": ["medium", "small"]})
     assert loaded == [("large-v3", "float16"), ("medium", "int8_float16")]
     assert result["model"] == "medium" and result["language"] == "en"
     assert result["segments"] == [{"start": 0.0, "end": 2.0, "text": "No way!", "words": [
