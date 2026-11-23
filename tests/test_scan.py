@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import sys
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -250,7 +251,7 @@ def test_transcribe_format_and_oom_fallback(monkeypatch, tmp_path):
         {"start": 0.0, "end": 0.8, "word": "No", "prob": 0.9}, {"start": 0.8, "end": 1.6, "word": "way!", "prob": 0.9}]}]
 
 
-def test_transcribe_non_oom_error_propagates(monkeypatch):
+def test_transcribe_non_oom_error_propagates(monkeypatch, tmp_path):
     import faster_whisper
 
     class Broken:
@@ -260,4 +261,57 @@ def test_transcribe_non_oom_error_propagates(monkeypatch):
     monkeypatch.setattr(faster_whisper, "WhisperModel", Broken)
     monkeypatch.setattr(M, "_cuda_device_count", lambda: 0)
     with pytest.raises(RuntimeError, match="corrupted"):
-        M.transcribe("a.wav", {"model": "small"})
+        M.transcribe(_tiny_wav(tmp_path / "a.wav"), {"model": "small"})
+
+
+class ChunkModel:
+    """Faux whisper : un segment par tronçon, à 1 s du début du tronçon ; peut échouer au n-ième appel."""
+
+    calls: ClassVar[list] = []
+    fail_at: int | None = None
+    oom_names: ClassVar[tuple] = ()
+
+    def __init__(self, name, device, compute_type):
+        self.name = name
+        if name in ChunkModel.oom_names:
+            raise RuntimeError("CUDA failed with error out of memory")
+
+    def transcribe(self, audio, language=None, **kw):
+        assert isinstance(audio, np.ndarray) and len(audio) <= 60 * 16000 + 1   # jamais plus d'un tronçon en RAM
+        ChunkModel.calls.append((self.name, len(audio), language))
+        if ChunkModel.fail_at is not None and len(ChunkModel.calls) == ChunkModel.fail_at:
+            raise KeyboardInterrupt("session coupée")
+        info = type("I", (), {"language": "fr", "language_probability": 0.9, "duration": len(audio) / 16000})()
+        return iter([_Seg(1.0, 2.0, "salut", [_W(1.0, 1.5, "salut")])]), info
+
+
+def test_transcribe_in_chunks_resumes_after_interruption(monkeypatch, tmp_path):
+    import faster_whisper
+
+    wav = _tiny_wav(tmp_path / "long.wav", seconds=150)          # 150 s -> 3 tronçons de 60 s
+    monkeypatch.setattr(faster_whisper, "WhisperModel", ChunkModel)
+    monkeypatch.setattr(M, "_cuda_device_count", lambda: 0)
+    cfg = {"model": "small", "chunk_minutes": 1, "batch_size": 0}
+    ChunkModel.calls, ChunkModel.fail_at, ChunkModel.oom_names = [], 2, ()
+    with pytest.raises(KeyboardInterrupt):                         # coupure pendant le 2e tronçon
+        M.transcribe(wav, cfg, checkpoint_dir=tmp_path / "ckpt")
+    assert (tmp_path / "ckpt" / "transcript_chunks" / "chunk_000.json").is_file()
+
+    ChunkModel.calls, ChunkModel.fail_at = [], None
+    res = M.transcribe(wav, cfg, checkpoint_dir=tmp_path / "ckpt")
+    assert len(ChunkModel.calls) == 2                              # le tronçon 0 n'est pas refait
+    assert all(lang == "fr" for _, _, lang in ChunkModel.calls)    # langue du 1er tronçon réutilisée
+    assert [s["start"] for s in res["segments"]] == [1.0, 61.0, 121.0]   # horodatages décalés
+    assert res["segments"][2]["words"][0]["start"] == 121.0 and res["chunks"] == 3 and res["duration"] == 150
+
+
+def test_transcribe_chunks_oom_fallback(monkeypatch, tmp_path):
+    import faster_whisper
+
+    wav = _tiny_wav(tmp_path / "long.wav", seconds=90)
+    monkeypatch.setattr(faster_whisper, "WhisperModel", ChunkModel)
+    monkeypatch.setattr(M, "_cuda_device_count", lambda: 1)
+    monkeypatch.setattr(M, "cuda_vram_gb", lambda: 15.0)
+    ChunkModel.calls, ChunkModel.fail_at, ChunkModel.oom_names = [], None, ("large-v3",)
+    res = M.transcribe(wav, {"model": "auto", "chunk_minutes": 1, "batch_size": 0})
+    assert res["model"] == "medium" and len(res["segments"]) == 2
