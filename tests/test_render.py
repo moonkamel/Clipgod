@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 
+import numpy as np
 import pytest
 
 from modules import render as R
@@ -193,3 +194,44 @@ def test_hook_moves_below_a_face_in_the_top_band():
 def test_bigger_hook_by_default():
     ass = R.build_ass(words=[], clip_start=0, clip_duration=10, rcfg={"width": 1080, "height": 1920}, hook="Wait")
     assert "Style: Hook,Montserrat ExtraBold,92," in ass
+
+
+def _rgb(top, bottom, h=360, w=640):
+    img = np.full((h, w, 3), 120, np.uint8)
+    img[:top] = 0
+    if bottom:
+        img[h - bottom:] = 0
+    return img
+
+
+def test_detect_letterbox_needs_bars_on_most_frames():
+    frames = [(i / 2, _rgb(45, 45)) for i in range(10)]
+    y, h = R.detect_letterbox(frames, 1080)
+    assert 130 <= y <= 140 and 800 <= h <= 815 and y % 2 == 0 and h % 2 == 0
+    mixed = [(i / 2, _rgb(45, 45) if i < 5 else _rgb(0, 0)) for i in range(10)]   # moitié gameplay
+    assert R.detect_letterbox(mixed, 1080) is None
+    assert R.detect_letterbox([(0, _rgb(0, 0))] * 4, 1080) is None
+
+
+def test_video_filter_crops_letterbox_first():
+    graph = R.video_filter(R.Layout("center"), src_w=1920, src_h=1080, rcfg={}, letterbox=(136, 806))
+    assert graph.startswith("[0:v]crop=1920:806:0:136[lbx];[lbx]crop=")
+    assert graph.count("[0:v]") == 1
+
+
+@needs_ffmpeg
+def test_render_removes_letterbox(tmp_path):
+    src = tmp_path / "cine.mp4"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=8",
+                    "-f", "lavfi", "-i", "sine=f=440:d=8:sample_rate=48000",
+                    "-vf", ("drawbox=x=0:y=0:w=iw:h=46:color=black:t=fill,"
+                           "drawbox=x=0:y=ih-46:w=iw:h=46:color=black:t=fill"),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(src)], check=True)
+    cfg = _cfg(tmp_path, ab_variants=False)
+    clip = R.render([_moment()], str(src), str(tmp_path / "out"), cfg)[0]
+    # Haut de l'image (sous la zone du hook) : plus de bande noire.
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", "1", "-i", clip, "-frames:v", "1",
+                          "-vf", "format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True, check=True).stdout
+    frame = np.frombuffer(raw, np.uint8).reshape(640, 360)
+    assert frame[:20].mean() > 40 and frame[-20:].mean() > 40
