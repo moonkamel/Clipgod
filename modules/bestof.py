@@ -16,6 +16,7 @@ Chaque moment garde ses sous-titres, son hook et le crédit @streamer déjà inc
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -33,6 +34,9 @@ log = get_logger(__name__)
 TITLES = {"en": ("TOP {n}", "GTA 6 MOMENTS", "OF THE DAY"), "fr": ("TOP {n}", "GTA 6", "DU JOUR")}
 MONTHS = {"en": ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"],
           "fr": ["JANV.", "FÉVR.", "MARS", "AVR.", "MAI", "JUIN", "JUIL.", "AOÛT", "SEPT.", "OCT.", "NOV.", "DÉC."]}
+
+
+VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}
 
 
 class BestOfError(RuntimeError):
@@ -250,7 +254,8 @@ def build_filter(picks: Sequence[Pick], *, W: int, H: int, fps: int, intro: floa
         parts.append(f"[cv{k}]trim=0:{card},setpts=PTS-STARTPTS,{blur}[c{k}]")
         parts.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{card},{norm_a}[ca{k}]")
         parts.append(f"[mv{k}]trim=0:{p.use_seconds},setpts=PTS-STARTPTS[m{k}]")
-        parts.append(f"[{k}:a]atrim=0:{p.use_seconds},asetpts=PTS-STARTPTS,{norm_a},"
+        audio_in = f"[{k}:a]" if p.meta.get("has_audio", True) else "anullsrc=r=48000:cl=stereo,"
+        parts.append(f"{audio_in}atrim=0:{p.use_seconds},asetpts=PTS-STARTPTS,{norm_a},"
                      f"afade=t=out:st={max(0.0, p.use_seconds - 0.25)}:d=0.25[ma{k}]")
         labels.append(f"[c{k}][ca{k}][m{k}][ma{k}]")
     fonts = f":fontsdir={_ass_path(fonts_dir)}" if fonts_dir else ""
@@ -265,31 +270,90 @@ def build_caption(picks: Sequence[Pick], cfg: Mapping[str, Any], *, lang: str, d
     lines = [f"{title} 🔥 ({date_label})", ""]
     for p in sorted(picks, key=lambda p: -p.rank):
         hook = str(p.meta.get("hook") or "").strip()
-        lines.append(f"#{p.rank} @{p.streamer}" + (f" — {hook}" if hook else ""))
+        who = f" @{p.streamer}" if p.streamer else ""
+        lines.append(f"#{p.rank}{who}" + (f" — {hook}" if hook else ""))
     credits = " ".join(dict.fromkeys(f"@{p.streamer}" for p in picks if p.streamer))
+    if not credits:
+        credits = "@... (ajoute ici les créateurs des vidéos)"
     hashtags = get(cfg, "bestof.hashtags", None) or ["#gta6", "#gtavi", "#gta", "#gaming", "#top5", "#fyp"]
-    lines += ["", f"🎮 Credits: {credits}" if credits else "", "", " ".join(hashtags)]
+    lines += ["", f"🎮 Credits: {credits}", "", " ".join(hashtags)]
     return "\n".join(line for line in lines if line is not None).replace("\n\n\n", "\n\n").strip()
+
+
+def picks_from_folder(folder: str | Path, *, limit: int = 10) -> list[Pick]:
+    """Vidéos d'un dossier, dans l'ordre des noms de fichiers (1er fichier = n°1 du classement).
+
+    Un ``@pseudo`` dans le nom du fichier sert de crédit (« 1 - @KaiCenat crash.mp4 »).
+    """
+    import json
+    import re
+    import subprocess
+
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise BestOfError("ffprobe introuvable (il est installé avec ffmpeg).")
+    root = Path(folder)
+    if not root.is_dir():
+        raise BestOfError(f"Dossier introuvable : {root}")
+
+    def natural(p: Path) -> list[Any]:
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", p.name)]
+
+    files = sorted((f for f in root.iterdir() if f.is_file() and f.suffix.lower() in VIDEO_EXTS), key=natural)
+    picks: list[Pick] = []
+    for f in files[:limit]:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration:stream=codec_type",
+                              "-of", "json", str(f)], capture_output=True, text=True, check=False)
+        try:
+            info = json.loads(out.stdout or "{}")
+            duration = float(info["format"]["duration"])
+        except (KeyError, ValueError, TypeError):
+            log.warning("Vidéo illisible ignorée : %s", f.name)
+            continue
+        kinds = {st.get("codec_type") for st in info.get("streams") or []}
+        if "video" not in kinds or duration < 1:
+            continue
+        handle = re.search(r"@([A-Za-z0-9_.]{2,30})", f.stem)
+        meta = {"video_id": f"folder_{re.sub(r'[^A-Za-z0-9_]', '_', f.stem)[:60]}", "moment_idx": 0,
+                "streamer": handle.group(1).rstrip(".") if handle else "", "hook": None,
+                "has_audio": "audio" in kinds, "source_file": f.name}
+        picks.append(Pick(f.stem, f, meta, duration, rank=len(picks) + 1))
+    return picks
 
 
 def make_bestof(cfg: Mapping[str, Any], *, now: datetime | None = None, count: int | None = None,
                 hours: float | None = None, allow_repeat: bool | None = None, output_dir: str | Path | None = None,
-                record: bool = True, viral: bool = False) -> BestOf:
-    """Sélectionne, monte et enregistre le best-of du jour. Lève :class:`BestOfError` s'il manque des moments."""
+                record: bool = True, viral: bool = False, folder: str | Path | None = None,
+                archive: bool = True) -> BestOf:
+    """Sélectionne, monte et enregistre le best-of du jour. Lève :class:`BestOfError` s'il manque des moments.
+
+    ``folder`` : compile les vidéos de ce dossier (ordre des noms = classement) au lieu des clips ClipGod ;
+    ``archive`` : les déplace ensuite dans ``<folder>/publies/<date>/`` pour que le dossier soit prêt le lendemain.
+    """
     from modules.render import _ffmpeg, _run, audio_args, encoder_args, ensure_font
 
     bcfg = get(cfg, "bestof", {}) or {}
     rcfg: Mapping[str, Any] = cfg.get("render") or {}
     now = now or utc_now()
-    picks = select_picks(cfg, now=now, count=count, hours=hours, allow_repeat=allow_repeat, viral=viral)
-    minimum = int(bcfg.get("min_count", 3))
+    if folder is not None:
+        picks = picks_from_folder(resolve_path(cfg, folder), limit=int(count or bcfg.get("folder_max_videos", 10)))
+        minimum = 2
+        if len(picks) < minimum:
+            raise BestOfError(f"{len(picks)} vidéo(s) dans {folder} : il en faut au moins 2 (.mp4, .mov, .webm…).")
+    else:
+        picks = select_picks(cfg, now=now, count=count, hours=hours, allow_repeat=allow_repeat, viral=viral)
+        minimum = int(bcfg.get("min_count", 3))
     if len(picks) < minimum:
         hint = ("Lancez clipgod viral, puis Colab (Tout exécuter), puis clipgod sync." if viral else
                 "Traitez d'autres VODs (clipgod discover --trending --prepare 2) puis clipgod sync.")
         raise BestOfError(f"Seulement {len(picks)} moment(s) récent(s) utilisable(s) (minimum {minimum}). {hint}")
     intro, card = float(bcfg.get("intro_seconds", 1.6)), float(bcfg.get("card_seconds", 0.9))
-    plan_durations(picks, max_clip=float(bcfg.get("max_clip_seconds", 18)),
-                   target_total=float(bcfg.get("target_seconds", 95)), intro=intro, card=card)
+    if folder is not None:
+        plan_durations(picks, max_clip=float(bcfg.get("folder_max_clip_seconds", 30)),
+                       target_total=float(bcfg.get("folder_target_seconds", 170)), intro=intro, card=card)
+    else:
+        plan_durations(picks, max_clip=float(bcfg.get("max_clip_seconds", 18)),
+                       target_total=float(bcfg.get("target_seconds", 95)), intro=intro, card=card)
 
     tz = ZoneInfo(str(get(cfg, "project.timezone", "Europe/Paris")))
     local = now.astimezone(tz)
@@ -333,5 +397,12 @@ def make_bestof(cfg: Mapping[str, Any], *, now: datetime | None = None, count: i
             data.setdefault("bestof", {})[stem] = {
                 "file": str(video), "groups": [p.group for p in picks], "clips": [p.clip_id for p in picks],
                 "duration": total, "created_at": utc_now_iso()}
+    if folder is not None and archive:
+        done = resolve_path(cfg, folder) / "publies" / local.date().isoformat()
+        done.mkdir(parents=True, exist_ok=True)
+        for p in picks:
+            target = done / p.path.name
+            shutil.move(str(p.path), str(target))
+            p.path = target
     log.info("✔ best-of %s (%.0f s)", video, total)
     return BestOf(video, caption_file, caption, picks, total)

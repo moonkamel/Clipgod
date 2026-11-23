@@ -409,6 +409,8 @@ clipgod bestof                            # compilation #5 -> #1 des meilleurs m
 - **Best-of** : une variante par moment, sans cinématiques, ≤ 2 moments par streamer, jamais deux fois le même
   moment ; carte titre, cartes « #N @streamer » sur fond flouté, badge pendant chaque moment ; ~90 s.
   Sortie : `output/bestof/TOP5_<date>.mp4` + `.txt` (classement, crédits, hashtags).
+- **Vos propres vidéos** : `clipgod bestof --folder bestof` compile les vidéos du dossier `bestof/` (ordre des noms
+  = classement, `@pseudo` dans le nom = crédit), puis les range dans `bestof/publies/<date>/`.
 - **Chaque matin** : `scripts/daily.ps1` (sync → bestof → tendances → Colab), installé comme tâche planifiée
   Windows par `scripts/install_daily_task.ps1`. Seul le clic « Tout exécuter » sur Colab reste manuel.
 

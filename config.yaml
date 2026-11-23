@@ -333,6 +333,10 @@ bestof:
   language: null                    # en | fr ; défaut : scan.hook_language
   output_dir: output/bestof
   hashtags: ["#gta6", "#gtavi", "#gta", "#gaming", "#top5", "#fyp"]
+  # clipgod bestof --folder <dossier> : compilation de vos propres vidéos (ordre des noms = classement)
+  folder_max_videos: 10
+  folder_max_clip_seconds: 30       # chaque vidéo est coupée à 30 s max
+  folder_target_seconds: 170        # durée totale visée
 
 # ---------------------------------------------------------------------
 # Module 6 — monetize (laptop)

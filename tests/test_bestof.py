@@ -144,3 +144,35 @@ def test_cli_bestof_plan_and_not_enough(env):
     assert res.exit_code == 0 and "a_0.mp4" in res.output
     res = runner.invoke(clipgod.app, ["bestof", "--no-open", "--hours", "1000"])
     assert res.exit_code == 1 and "minimum 3" in res.output
+
+
+@needs_ffmpeg
+def test_bestof_from_folder(env, tmp_path):
+    cfg, _state, _add, _moments = env
+    folder = tmp_path / "bestof"
+    folder.mkdir()
+    specs = [("1 - @KaiCenat crash.mp4", "red", "180x320", True), ("2 - wtf.mp4", "green", "320x180", False),
+             ("10 - last.mp4", "blue", "180x320", True)]
+    for name, color, size, sound in specs:
+        cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c={color}:s={size}:r=15:d=3"]
+        if sound:
+            cmd += ["-f", "lavfi", "-i", "sine=f=500:d=3:sample_rate=48000", "-c:a", "aac", "-shortest"]
+        subprocess.run([*cmd, "-c:v", "libx264", "-preset", "ultrafast", str(folder / name)], check=True)
+    (folder / "notes.txt").write_text("ignoré")
+
+    picks = B.picks_from_folder(folder)
+    assert [p.path.name for p in picks] == ["1 - @KaiCenat crash.mp4", "2 - wtf.mp4", "10 - last.mp4"]  # tri naturel
+    assert picks[0].streamer == "KaiCenat" and not picks[1].meta["has_audio"]
+
+    cfg["bestof"].update({"intro_seconds": 1.0, "card_seconds": 0.5})
+    result = B.make_bestof(cfg, now=NOW, folder=folder)
+    info = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration", "-of", "json",
+         str(result.video)], capture_output=True, text=True, check=True).stdout)
+    v = next(s for s in info["streams"] if s["codec_type"] == "video")
+    assert (v["width"], v["height"]) == (180, 320)
+    assert float(info["format"]["duration"]) == pytest.approx(1.0 + 3 * (0.5 + 3.0), abs=0.5)
+    assert "#1 @KaiCenat" in result.caption and "#2" in result.caption
+    archived = folder / "publies" / "2026-11-23"
+    assert sorted(p.name for p in archived.iterdir()) == sorted(n for n, *_ in specs)
+    assert not list(folder.glob("*.mp4")) and (folder / "notes.txt").is_file()     # dossier prêt pour demain
