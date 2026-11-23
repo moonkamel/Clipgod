@@ -382,12 +382,15 @@ def publish(
 def tiktok(
     ctx: typer.Context,
     platform: str = typer.Option("tiktok", "--platform", "-p", help="tiktok | instagram_reels."),
-    limit: int = typer.Option(3, "--limit", "-n", help="Nombre de clips à préparer dans cette séance."),
+    limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Nombre de clips (séance : 3 par défaut ; "
+                                        "--export : tous)."),
     schedule: bool = typer.Option(True, "--schedule/--now", help="Propose un créneau de forte audience par clip."),
     plan_only: bool = typer.Option(False, "--plan", help="Affiche les prochains posts sans rien marquer."),
     choose: bool = typer.Option(False, "--choose", help="Liste tous les clips : regarde-les et choisis "
                                 "lesquels publier (ex. 1,3,5-7)."),
     open_studio: bool = typer.Option(True, "--open/--no-open", help="Ouvre TikTok Studio dans le navigateur."),
+    export: bool = typer.Option(False, "--export", "-e", help="Copie la meilleure vidéo de chaque moment dans "
+                                "output/a_publier (nommée d'après son hook) + legendes.txt. Sans doublons."),
 ) -> None:
     """Publication manuelle assistée : légende copiée, clip sélectionné, créneau conseillé (gratuit, sans API)."""
     import webbrowser
@@ -409,6 +412,26 @@ def tiktok(
     cfg = ctx.obj["config"]
     tz = ZoneInfo(str(cfg.get("project", {}).get("timezone", "Europe/Paris")))
     rejected: list[tuple[str, list[str]]] = []
+    if export:
+        from modules.manual import export_ready, open_folder
+
+        rep = export_ready(cfg, platform=platform, limit=limit, schedule=schedule,
+                           rejected=rejected)
+        for clip_id, reasons in rejected:
+            console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
+        for group in rep.skipped_language:
+            console.print(f"[yellow]↷ {group}[/] : source dans une autre langue, écartée")
+        if not rep.files:
+            console.print("[dim]Aucun nouveau clip à exporter : lancez clipgod sync après un nouveau job.[/]")
+            return
+        for target, post in rep.files:
+            when = post.slot.astimezone(tz).strftime("%d/%m à %H:%M") if post.slot else "dès que possible"
+            console.print(f"  [green]✔[/] {target.name}  [dim]→ {when}[/]")
+        console.print(f"\n[bold]{len(rep.files)} vidéo(s) + legendes.txt[/] dans {rep.folder}")
+        console.print("[dim]Ces moments ne seront plus réexportés. Publie-les dans l'ordre des numéros.[/]")
+        if open_studio:
+            open_folder(rep.folder)
+        return
     if choose:
         listing = plan_manual(cfg, platform=platform, schedule=False, rejected=rejected, one_per_moment=False)
         for clip_id, reasons in rejected:
@@ -447,7 +470,8 @@ def tiktok(
             console.print(f"[yellow]{len(selected) - len(posts)} clip(s) sans créneau libre dans les "
                           "10 prochains jours : relance plus tard.[/]")
     else:
-        posts = plan_manual(cfg, platform=platform, limit=limit, schedule=schedule, rejected=rejected)
+        posts = plan_manual(cfg, platform=platform, limit=3 if limit is None else limit, schedule=schedule,
+                            rejected=rejected)
         for clip_id, reasons in rejected:
             console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
     if not posts:

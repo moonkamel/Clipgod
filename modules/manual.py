@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from core.config import get, path
+from core.config import get, path, resolve_path
 from core.logger import get_logger
-from core.storage import StateStore, utc_now, utc_now_iso
+from core.scoring import is_latin_text
+from core.storage import StateStore, read_json, utc_now, utc_now_iso
 from modules.publish import (
     PUBLISHED_STATES,
     ClipInfo,
@@ -139,6 +140,130 @@ def record_manual(cfg: Mapping[str, Any], post: ManualPost, *, url: str | None =
     state.upsert_clip(post.clip.clip_id, status=status, last_post=post.post_id)
     log.info("✔ %s -> %s (manuel, %s)", post.clip.clip_id, post.platform, url or status)
     return entry
+
+
+# ---------------------------------------------------------------------------
+# Export : un dossier prêt à publier (meilleure variante par moment + légendes)
+# ---------------------------------------------------------------------------
+GENERIC_HOOKS = ("the loudest moment of the stream", "watch till the end", "gta 6 is something else", "wait for it",
+                 "the craziest gta 6 moment yet")
+
+
+def hook_quality(hook: str | None) -> float:
+    """Note d'un hook pour choisir la variante à publier : précis > citation > générique ; non latin = 0."""
+    text = re.sub(r"\s+", " ", str(hook or "")).strip()
+    if not text or not is_latin_text(text):
+        return 0.0
+    plain = re.sub(r"[^\w\s']", "", text.lower()).strip()
+    if any(plain.startswith(g) for g in GENERIC_HOOKS):
+        return 1.0
+    if '"' in text or "“" in text:                              # citation du transcript : souvent un fragment
+        return 1.5
+    return 2.0
+
+
+def safe_title(hook: str | None, max_len: int = 60) -> str:
+    """Hook -> nom de fichier Windows valide (sans emojis, guillemets ni caractères interdits)."""
+    text = "".join(c for c in str(hook or "") if c.isalnum() or c in " '-,!?.&")
+    text = re.sub(r"[?]", "", text)                                # « ? » interdit dans un nom Windows
+    text = re.sub(r"\s+", " ", text).strip(" .-,'")
+    return (text[:max_len].rstrip(" .-,'") or "clip")
+
+
+def _source_languages(cfg: Mapping[str, Any]) -> dict[str, str | None]:
+    """video_id -> langue détectée par Whisper (``output/moments/<video_id>.json``)."""
+    moments_dir = resolve_path(cfg, get(cfg, "sync.moments_dir", "output/moments"))
+    out: dict[str, str | None] = {}
+    if moments_dir.is_dir():
+        for f in moments_dir.glob("*.json"):
+            doc = read_json(f, default={}) or {}
+            if isinstance(doc, dict) and doc.get("video_id"):
+                out[str(doc["video_id"])] = doc.get("language")
+    return out
+
+
+@dataclass
+class ExportReport:
+    folder: Path
+    files: list[tuple[Path, ManualPost]]
+    skipped_language: list[str]
+
+
+def export_ready(cfg: Mapping[str, Any], *, platform: str = "tiktok", limit: int | None = None,
+                 folder: str | Path | None = None, schedule: bool = True, now: datetime | None = None,
+                 rejected: list[tuple[str, list[str]]] | None = None) -> ExportReport:
+    """Copie la meilleure variante de chaque moment dans un dossier « prêt à publier » + ``legendes.txt``.
+
+    - une seule vidéo par moment (le meilleur hook, cf. ``hook_quality``) : aucun doublon ;
+    - sources dans une langue hors ``publish.manual.languages`` (défaut : ``discover.languages``) écartées ;
+    - fichiers nommés ``01 - <hook>.mp4`` (meilleur score d'abord) ; le dossier est vidé à chaque export ;
+    - les moments exportés sont notés (statut ``exported``) et ne seront plus jamais réexportés.
+    """
+    mcfg = get(cfg, "publish.manual", {}) or {}
+    tz = ZoneInfo(str(get(cfg, "project.timezone", "Europe/Paris")))
+    langs = {str(x).lower() for x in (mcfg.get("languages") or get(cfg, "discover.languages", []) or [])}
+    src_lang = _source_languages(cfg)
+    listing = plan_manual(cfg, platform=platform, schedule=False, now=now, rejected=rejected, one_per_moment=False)
+    best: dict[str, ClipInfo] = {}
+    skipped_language: list[str] = []
+    for post in listing:
+        c = post.clip
+        lang = src_lang.get(str(c.meta.get("video_id")))
+        if langs and lang and lang.lower() not in langs:
+            if c.group not in skipped_language:
+                skipped_language.append(c.group)
+            continue
+        cur = best.get(c.group)
+        key = (hook_quality(c.meta.get("hook")), -c.variant)
+        if cur is None or key > (hook_quality(cur.meta.get("hook")), -cur.variant):
+            best[c.group] = c
+    chosen = sorted(best.values(), key=lambda c: (-c.score, c.group))
+    chosen = [c for c in chosen if hook_quality(c.meta.get("hook")) > 0]      # hook illisible : on écarte
+    if limit is not None:
+        chosen = chosen[: max(0, limit)]
+    posts = plan_manual(cfg, platform=platform, schedule=schedule, now=now, only=[c.clip_id for c in chosen])
+
+    out = resolve_path(cfg, folder or mcfg.get("export_dir") or "output/a_publier")
+    out.mkdir(parents=True, exist_ok=True)
+    for old in [*out.glob("*.mp4"), *out.glob("*.txt")]:
+        old.unlink()
+    files: list[tuple[Path, ManualPost]] = []
+    lines: list[str] = []
+    state = StateStore(path(cfg, "state"))
+    for i, post in enumerate(posts, 1):
+        name = f"{i:02d} - {safe_title(post.clip.meta.get('hook'))}.mp4"
+        target = out / name
+        shutil.copy2(post.clip.path, target)
+        files.append((target, post))
+        when = post.slot.astimezone(tz).strftime("%d/%m à %H:%M") if post.slot else "dès que possible"
+        lines += [f"===== {name} =====", f"Programmer : {when}", "", post.caption, "", ""]
+        with state.transaction() as data:
+            data.setdefault("posts", {})[post.post_id] = {
+                "clip_id": post.clip.clip_id, "platform": platform, "backend": "manual", "status": "exported",
+                "slot": post.slot.isoformat() if post.slot else None, "file": str(target),
+                "hook": post.clip.meta.get("hook"), "variant": post.clip.variant, "group": post.clip.group,
+                "campaign": post.clip.meta.get("campaign"), "exported_at": utc_now_iso()}
+    if files:
+        # UTF-8 avec BOM : le Bloc-notes affiche correctement les emojis.
+        (out / "legendes.txt").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8-sig")
+    log.info("%d clip(s) exporté(s) dans %s", len(files), out)
+    return ExportReport(out, files, skipped_language)
+
+
+def open_folder(folder: Path) -> bool:
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(folder))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        elif shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", str(folder)])
+        else:
+            return False
+        return True
+    except OSError as exc:
+        log.warning("Impossible d'ouvrir le dossier : %s", exc)
+        return False
 
 
 # ---------------------------------------------------------------------------

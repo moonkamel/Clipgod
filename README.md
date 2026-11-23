@@ -292,6 +292,7 @@ clipgod publish --live          # programme sur les créneaux de forte audience 
 clipgod publish --live --now    # publie immédiatement (toujours plafonné à 6/jour)
 clipgod tiktok                  # TikTok gratuit : légende copiée + clip sélectionné, à déposer dans TikTok Studio
 clipgod tiktok --choose         # choisir soi-même les clips à publier (aperçu vidéo avec « v3 »)
+clipgod tiktok --export         # dossier « à publier » : meilleure variante par moment + legendes.txt, sans doublons
 ```
 
 1. **Validation** (module `monetize`) :
