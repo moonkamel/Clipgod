@@ -497,8 +497,11 @@ clipgod toptiktok --hours 24 --scrolls 15   # sur 24 h, en lisant plus de vidéo
 ```
 
 TikTok n'a pas d'API gratuite : ClipGod ouvre les pages #gta6, #gtavi et #gta6gameplay dans **ton Chrome** (ou
-Edge), fait défiler et lit les liens, les vues et les descriptions ; la date de publication est déduite de
-l'identifiant de chaque vidéo. Ne ferme pas la fenêtre pendant la lecture (~1 min). Si TikTok affiche une
+Edge), fait défiler, et lit les données que la page télécharge pour s'afficher : lien, **vues**, description et
+**langue détectée par TikTok** (à défaut, devinée d'après la description). Une vidéo sans vues ni langue dans la
+liste est relue sur sa propre page (60 au plus, ~2 s chacune). Par défaut, **seules les vidéos en anglais** sont
+gardées : `--lang en,fr` pour ajouter le français, `--lang all` pour toutes. La date de publication est déduite
+de l'identifiant de chaque vidéo. Ne ferme pas la fenêtre pendant la lecture (~1 min). Si TikTok affiche une
 vérification, résous-la une fois : les cookies sont gardés dans `cache\tiktok_profile`. Seules les vidéos chargées
 sur ces pages sont classées (quelques centaines au plus), pas tout TikTok.
 

@@ -54,6 +54,73 @@ class TikTokVideo:
     views: int
     text: str
     published_at: datetime
+    lang: str | None = None              # langue détectée par TikTok (textLanguage), sinon None
+
+
+# ---------------------------------------------------------------------------
+# Données structurées de TikTok (ce que la page télécharge pour s'afficher)
+# ---------------------------------------------------------------------------
+def item_to_raw(it: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Vidéo au format de l'API web TikTok (``itemList`` / ``itemStruct``) -> entrée brute."""
+    vid = str(it.get("id") or "")
+    author = it.get("author")
+    author = author.get("uniqueId") if isinstance(author, Mapping) else author
+    if not vid.isdigit() or not author:
+        return None
+    stats = it.get("statsV2") or it.get("stats") or {}
+    views = stats.get("playCount") if isinstance(stats, Mapping) else None
+    return {"href": f"https://www.tiktok.com/@{author}/video/{vid}", "views": views if views is not None else "",
+            "text": it.get("desc") or "", "lang": it.get("textLanguage") or None, "source": "api"}
+
+
+def extract_items(obj: Any, out: list[dict[str, Any]] | None = None, depth: int = 0) -> list[dict[str, Any]]:
+    """Cherche récursivement les vidéos dans une réponse JSON de TikTok (listes ``itemList``, ``itemStruct``…)."""
+    out = [] if out is None else out
+    if depth > 12:
+        return out
+    if isinstance(obj, Mapping):
+        if "id" in obj and ("stats" in obj or "statsV2" in obj) and "author" in obj:
+            raw = item_to_raw(obj)
+            if raw:
+                out.append(raw)
+            return out
+        for v in obj.values():
+            extract_items(v, out, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            extract_items(v, out, depth + 1)
+    return out
+
+
+# Langue d'une description quand TikTok ne la donne pas : mots-outils les plus fréquents par langue.
+STOPWORDS = {
+    "en": {"the", "a", "an", "and", "you", "your", "is", "in", "of", "to", "this", "that", "how", "what", "with",
+           "my", "it", "on", "for", "when", "me", "he", "she", "they", "can", "be", "was", "are", "do", "don't",
+           "best", "never", "find", "where", "get", "insane", "most", "new", "why", "who"},
+    "fr": {"le", "la", "les", "un", "une", "des", "et", "est", "dans", "pour", "avec", "sur", "en", "du", "de",
+           "ou", "trouver", "avoir", "quelques", "voix", "mon", "ma", "pas", "qui", "que", "c'est"},
+    "es": {"el", "los", "las", "y", "es", "en", "con", "para", "por", "una", "del", "que", "cómo", "dónde"},
+    "it": {"il", "lo", "gli", "e", "è", "di", "con", "per", "una", "dei", "che", "contanti", "leggendario"},
+    "pt": {"o", "os", "as", "e", "é", "em", "com", "para", "uma", "do", "da", "que", "não", "você"},
+    "de": {"der", "die", "das", "und", "ist", "mit", "für", "ein", "eine", "nicht", "wie", "auf"},
+    "tr": {"ve", "bir", "bu", "için", "ile", "deyince", "de", "da", "çok", "ne", "yanlış", "karar"},
+}
+
+
+def guess_language(text: str) -> str | None:
+    """Langue probable d'une description (``en``, ``fr``…), ``other`` hors alphabet latin, None si indécidable."""
+    from core.scoring import is_latin_text
+
+    clean = re.sub(r"(?:[#@]\S+|https?://\S+|created by .*$)", " ", text, flags=re.IGNORECASE)
+    if not is_latin_text(clean, threshold=0.6):
+        return "other"
+    words = re.findall(r"[a-zà-öø-ÿçğışü']+", clean.lower())
+    scores = {lang: sum(w in sw for w in words) for lang, sw in STOPWORDS.items()}
+    best = max(scores, key=lambda k: scores[k])
+    top = scores[best]
+    if top == 0 or sum(1 for v in scores.values() if v == top) > 1:
+        return None
+    return best
 
 
 def parse_count(text: str | None) -> int:
@@ -83,33 +150,47 @@ def id_timestamp(video_id: str) -> datetime:
 
 
 def parse_items(raw: Iterable[Mapping[str, Any]]) -> list[TikTokVideo]:
-    """Résultats bruts de la page -> vidéos uniques (le plus grand nombre de vues lu est gardé)."""
+    """Résultats bruts (API + page) -> vidéos uniques : vues, langue et description les plus complètes gardées."""
     best: dict[str, TikTokVideo] = {}
     for item in raw:
         m = VIDEO_RE.search(str(item.get("href") or ""))
         if not m:
             continue
         author, vid = m.group(1), m.group(2)
-        video = TikTokVideo(vid, author, f"https://www.tiktok.com/@{author}/video/{vid}",
-                            parse_count(item.get("views")), " ".join(str(item.get("text") or "").split()),
-                            id_timestamp(vid))
+        views = item.get("views")
+        count = int(views) if isinstance(views, (int, float)) or str(views).isdigit() else parse_count(views)
+        text = re.sub(r"\s+created by .*$", "", " ".join(str(item.get("text") or "").split()), flags=re.IGNORECASE)
+        video = TikTokVideo(vid, author, f"https://www.tiktok.com/@{author}/video/{vid}", count, text,
+                            id_timestamp(vid), item.get("lang") or None)
         cur = best.get(vid)
-        if cur is None or video.views > cur.views or (not cur.text and video.text):
+        if cur is None:
             best[vid] = video
+            continue
+        cur.views = max(cur.views, video.views)
+        cur.lang = cur.lang or video.lang
+        if len(video.text) > len(cur.text):
+            cur.text = video.text
     return list(best.values())
 
 
 def rank(videos: Sequence[TikTokVideo], *, now: datetime, hours: float, count: int, gameplay_only: bool = True,
-         cfg: Mapping[str, Any] | None = None) -> tuple[list[tuple[TikTokVideo, str]], list[tuple[TikTokVideo, str]]]:
-    """(retenues, écartées) : publiées depuis ``hours`` h, filtre gameplay, triées par vues."""
+         cfg: Mapping[str, Any] | None = None, languages: Sequence[str] | None = ("en",)
+         ) -> tuple[list[tuple[TikTokVideo, str]], list[tuple[TikTokVideo, str]]]:
+    """(retenues, écartées) : publiées depuis ``hours`` h, langue (TikTok, sinon devinée), gameplay ; par vues."""
     from modules.viral import Short, gameplay_verdict
 
     since = now - timedelta(hours=hours)
+    wanted = {x.lower() for x in languages or []}
     kept: list[tuple[TikTokVideo, str]] = []
     dropped: list[tuple[TikTokVideo, str]] = []
     for v in sorted(videos, key=lambda v: -v.views):
         if v.published_at < since:
             continue
+        if wanted:
+            lang = (v.lang or guess_language(v.text) or "").split("-")[0].lower()
+            if lang not in wanted:
+                dropped.append((v, f"langue : {lang or 'inconnue'}"))
+                continue
         if not gameplay_only:
             kept.append((v, ""))
             continue
@@ -170,8 +251,13 @@ def collect(tags: Sequence[str], *, profile_dir: Path, scrolls: int = 8, headles
         if ctx is None:
             raise TikTokError("Aucun navigateur utilisable : installez Google Chrome ou Microsoft Edge.")
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        responses: list[Any] = []
+        # On garde seulement les réponses ; leur contenu est lu après le défilement (jamais dans le gestionnaire).
+        page.on("response", lambda r: responses.append(r) if "item_list" in r.url or "/api/challenge" in r.url
+                else None)
         try:
             for tag in tags:
+                responses.clear()
                 say(f"#{tag} : ouverture de la page…")
                 page.goto(f"{base_url}/tag/{tag}", wait_until="domcontentloaded", timeout=60_000)
                 try:
@@ -182,9 +268,78 @@ def collect(tags: Sequence[str], *, profile_dir: Path, scrolls: int = 8, headles
                 for _ in range(scrolls):
                     page.mouse.wheel(0, 3500)
                     page.wait_for_timeout(scroll_pause_ms)
+                api: list[dict[str, Any]] = []
+                for r in responses:
+                    try:
+                        extract_items(r.json(), api)
+                    except Exception as exc:  # noqa: BLE001 — réponse non JSON ou déjà libérée
+                        log.debug("réponse TikTok ignorée (%s) : %s", r.url[:80], exc)
+                api += _page_state_items(page)
                 found = page.evaluate(COLLECT_JS)
-                say(f"#{tag} : {len(found)} vignette(s) lue(s)")
+                with_views = sum(1 for it in api if str(it.get("views")) not in ("", "None"))
+                say(f"#{tag} : {len(found)} vignette(s), {len(api)} fiche(s) détaillée(s) dont {with_views} avec vues")
+                raw.extend(api)
                 raw.extend(found)
+        finally:
+            ctx.close()
+    return raw
+
+
+STATE_JS = """
+() => [...document.querySelectorAll('script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE')]
+        .map(s => s.textContent)
+"""
+
+
+def _page_state_items(page: Any) -> list[dict[str, Any]]:
+    """Vidéos présentes dans les données embarquées de la page (premier lot, page vidéo…)."""
+    import json
+
+    out: list[dict[str, Any]] = []
+    try:
+        for text in page.evaluate(STATE_JS) or []:
+            try:
+                extract_items(json.loads(text), out)
+            except ValueError:
+                continue
+    except Exception as exc:  # noqa: BLE001
+        log.debug("données embarquées illisibles : %s", exc)
+    return out
+
+
+def fetch_details(urls: Sequence[str], *, profile_dir: Path, headless: bool = False, say: Callable[[str], None] = print,
+                  executable_path: str | None = None, pause_ms: int = 1200) -> list[dict[str, Any]]:
+    """Ouvre chaque page vidéo pour lire vues et langue dans ses données embarquées (quand la liste ne les donne pas)."""
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise TikTokError("Playwright n'est pas installé : pip install playwright") from exc
+    raw: list[dict[str, Any]] = []
+    with sync_playwright() as p:
+        ctx = None
+        options: list[dict[str, Any]] = ([{"executable_path": executable_path}] if executable_path else
+                                         [{"channel": "chrome"}, {"channel": "msedge"}, {}])
+        for opt in options:
+            try:
+                ctx = p.chromium.launch_persistent_context(str(profile_dir), headless=headless, locale="en-US",
+                                                           viewport={"width": 1280, "height": 900}, **opt)
+                break
+            except PlaywrightError:
+                continue
+        if ctx is None:
+            raise TikTokError("Aucun navigateur utilisable : installez Google Chrome ou Microsoft Edge.")
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        try:
+            for i, url in enumerate(urls, 1):
+                if i == 1 or i % 10 == 0:
+                    say(f"lecture des vues : {i}/{len(urls)}")
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+                    page.wait_for_timeout(pause_ms)
+                except PlaywrightError:
+                    continue
+                raw += _page_state_items(page)
         finally:
             ctx.close()
     return raw
@@ -193,19 +348,34 @@ def collect(tags: Sequence[str], *, profile_dir: Path, scrolls: int = 8, headles
 def run_toptiktok(cfg: Mapping[str, Any], *, hours: float = 48, count: int = 10, tags: Sequence[str] | None = None,
                   scrolls: int | None = None, headless: bool = False, gameplay_only: bool = True,
                   output: str | Path = "top10_tiktok_gta6.txt", now: datetime | None = None,
+                  languages: Sequence[str] | None = None,
                   collect_fn: Callable[..., list[dict[str, Any]]] = collect,
+                  details_fn: Callable[..., list[dict[str, Any]]] = fetch_details,
                   say: Callable[[str], None] = print) -> tuple[Path, list[tuple[TikTokVideo, str]]]:
     tcfg = get(cfg, "tiktok_top", {}) or {}
     tags = list(tags or tcfg.get("tags") or ["gta6", "gtavi", "gta6gameplay"])
-    raw = collect_fn(tags, profile_dir=resolve_path(cfg, get(cfg, "paths.cache", "cache")) / "tiktok_profile",
-                     scrolls=int(scrolls or tcfg.get("scrolls", 8)), headless=headless, say=say)
+    languages = list(languages if languages is not None else (tcfg.get("languages") or ["en"]))
+    profile = resolve_path(cfg, get(cfg, "paths.cache", "cache")) / "tiktok_profile"
+    now = now or datetime.now(timezone.utc)
+    raw = collect_fn(tags, profile_dir=profile, scrolls=int(scrolls or tcfg.get("scrolls", 8)), headless=headless,
+                     say=say)
     videos = parse_items(raw)
     if not videos:
         raise TikTokError("Aucune vidéo lue sur TikTok. Si une vérification s'est affichée, relancez et résolvez-la "
                           "dans la fenêtre du navigateur (elle ne sera plus demandée ensuite).")
-    if sum(1 for v in videos if v.views) < len(videos) / 2:
-        say("⚠ Vues illisibles sur une partie des vignettes : le classement peut être approximatif.")
-    kept, dropped = rank(videos, now=now or datetime.now(timezone.utc), hours=hours, count=count,
-                         gameplay_only=gameplay_only, cfg=cfg)
+    # Vues / langue manquantes : on ouvre la page des vidéos récentes concernées (au plus detail_limit).
+    since = now - timedelta(hours=hours)
+    missing = [v for v in videos if v.published_at >= since and (not v.views or not v.lang)]
+    limit = int(tcfg.get("detail_limit", 60))
+    if missing and limit > 0:
+        say(f"{len(missing)} vidéo(s) récente(s) sans vues ou sans langue : lecture de leur page "
+            f"({min(len(missing), limit)} max, ~2 s chacune)")
+        missing.sort(key=lambda v: -v.published_at.timestamp())
+        details = details_fn([v.url for v in missing[:limit]], profile_dir=profile, headless=headless, say=say)
+        videos = parse_items([*raw, *details])
+    if sum(1 for v in videos if v.published_at >= since and v.views) < 3:
+        say("⚠ Vues illisibles sur la plupart des vidéos : le classement peut être approximatif.")
+    kept, dropped = rank(videos, now=now, hours=hours, count=count, gameplay_only=gameplay_only, cfg=cfg,
+                         languages=languages)
     out = write_report(output, kept, dropped, hours=hours, seen=len(videos), gameplay_only=gameplay_only)
     return out, kept
