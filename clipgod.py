@@ -573,6 +573,38 @@ def tiktok(
 
 
 @app.command()
+def topshorts(
+    ctx: typer.Context,
+    hours: float = typer.Option(48, "--hours", help="Shorts publiés depuis N heures (24 ou 48)."),
+    count: int = typer.Option(10, "--count", "-n", help="Nombre de Shorts listés."),
+    all_shorts: bool = typer.Option(False, "--all", help="Sans filtre gameplay."),
+    output: Path = typer.Option(Path("top10_shorts_gta6.txt"), "--output", "-o", help="Fichier texte produit."),
+) -> None:
+    """Liste les Shorts GTA 6 les plus vus (gameplay uniquement par défaut) avec leurs liens -> fichier .txt."""
+    from core.config import ConfigError
+    from core.quota import YouTubeQuota
+    from core.storage import utc_now
+    from modules.discover import YouTubeDiscover, _youtube_service
+    from modules.viral import top_shorts, write_top_shorts
+
+    cfg = ctx.obj["config"]
+    try:
+        yt = YouTubeDiscover(_youtube_service(cfg), YouTubeQuota.from_config(cfg), cfg, budget=250)
+        kept, dropped = top_shorts(cfg, yt, now=utc_now(), hours=hours, count=count, gameplay_only=not all_shorts)
+    except ConfigError as exc:
+        console.print(f"[red]topshorts :[/] {exc}")
+        raise typer.Exit(1) from None
+    out = write_top_shorts(output, kept, dropped, hours=hours, gameplay_only=not all_shorts)
+    for i, (sh, why) in enumerate(kept, 1):
+        console.print(f"{i:>2}. [bold]{sh.title[:70]}[/]\n    {sh.channel} · {sh.views:,} vues · {sh.url}"
+                      .replace(",", " ") + (f" [dim]({why})[/]" if why else ""))
+    if not all_shorts:
+        console.print(f"[dim]{len(dropped)} Short(s) écarté(s) (pas du gameplay ou indéterminés) : liste en bas du "
+                      "fichier.[/]")
+    console.print(f"\n✔ {out.resolve()}")
+
+
+@app.command()
 def viral(
     ctx: typer.Context,
     count: Optional[int] = typer.Option(None, "--count", "-n", help="Moments à préparer (défaut : 5)."),

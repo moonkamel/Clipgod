@@ -315,6 +315,9 @@ viral:
   download_padding: 8.0             # marge téléchargée autour de l'extrait (transcription)
   retry_failed_after_hours: 72      # un Short introuvable n'est réessayé qu'après 3 jours
   max_units: 400                    # quota YouTube par run
+  gameplay:                         # clipgod topshorts : filtre « gameplay uniquement » (titre, tags, description)
+    include: []                     # vide = liste par défaut (modules/viral.py GAMEPLAY_INCLUDE)
+    exclude: []                     # vide = liste par défaut (GAMEPLAY_EXCLUDE : réaction, comparaison, news…)
 
 # ---------------------------------------------------------------------
 # Best-of quotidien (laptop) : « Top 5 GTA 6 du jour » -> output/bestof/

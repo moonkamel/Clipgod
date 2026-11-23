@@ -62,6 +62,7 @@ class Short:
     duration: float
     published_at: datetime
     description: str = ""
+    tags: list[str] = field(default_factory=list)
 
     @property
     def url(self) -> str:
@@ -274,8 +275,83 @@ def viral_shorts(cfg: Mapping[str, Any], yt: Any, *, now: datetime) -> list[Shor
                          channel_id=sn.get("channelId", ""), views=int(st.get("viewCount") or 0),
                          duration=parse_iso8601_duration((v.get("contentDetails") or {}).get("duration")),
                          published_at=_parse_dt(sn.get("publishedAt")) or now,
-                         description=sn.get("description", "")))
+                         description=sn.get("description", ""), tags=list(sn.get("tags") or [])))
     out.sort(key=lambda s: -s.views)
+    return out
+
+
+# Le Short montre-t-il du gameplay ? YouTube ne le dit pas : on lit ce que la vidéo déclare (titre, tags,
+# description). Listes modifiables dans config.yaml (viral.gameplay.include / exclude).
+GAMEPLAY_INCLUDE = [
+    "gameplay", "physics", "crash", "chase", "police", "cops", "wanted", "mission", "heist", "glitch", "bug",
+    "stunt", "drift", "jump", "fight", "shootout", "fail", "funny", "moment", "moments", "secret", "easter egg",
+    "hidden", "you can", "can you", "play as", "4k", "60fps", "free roam", "open world", "graphics", "realistic",
+    "detail", "details", "npc", "npcs", "helicopter", "plane", "boat", "car", "cars", "bike", "tank", "weapon",
+    "weapons", "gun", "guns", "money", "robbery", "rob", "lucia", "jason", "vice city", "leonida", "map",
+    "wildlife", "alligator", "gator", "beach", "this guy", "never do", "don't do", "devs knew", "attention to detail",
+    "rampage", "chaos", "explosion", "escape", "sniper", "5 stars", "wanted level", "destroy", "insane",
+]
+GAMEPLAY_EXCLUDE = [
+    "vs gta", "gta 5 vs", "gta v vs", "gta 6 vs", "gta vi vs", "vs rdr2", "vs rdr", "rdr2 vs", "vs real life",
+    "versus", "better than", "compare", "compares", "comparison", "review", "reaction", "react", "reacts",
+    "podcast", "interview", "news", "leak", "leaked", "leaks", "trailer", "theory", "theories", "explained",
+    "opinion", "rant", "price", "release date", "delay", "delayed", "how will", "will be like", "ranking",
+    "tier list", "diy", "paper", "puzzle", "drawing", "lego", "cosplay", "unboxing", "irl", "real life", "ai",
+    "ending", "story", "lore", "stream", "streamer", "live", "cried", "crying", "rockstar confirmed",
+    "best game ever", "worth it", "should you", "buy",
+]
+
+
+def _has(text: str, words: Sequence[str]) -> list[str]:
+    return [w for w in words if re.search(rf"(?<![\w]){re.escape(w)}(?![\w])", text)]
+
+
+def gameplay_verdict(short: Short, cfg: Mapping[str, Any] | None = None) -> tuple[bool, str]:
+    """(gameplay ?, raison). Exclu dès qu'un mot « discussion / réaction / hors-jeu » apparaît dans le titre ou
+    les tags ; retenu seulement si un mot « gameplay » apparaît (titre, tags, puis début de la description)."""
+    gcfg = get(cfg or {}, "viral.gameplay", {}) or {}
+    include = [w.lower() for w in (gcfg.get("include") or GAMEPLAY_INCLUDE)]
+    exclude = [w.lower() for w in (gcfg.get("exclude") or GAMEPLAY_EXCLUDE)]
+    head = f"{short.title} {' '.join(short.tags)}".lower()
+    bad = _has(head, exclude)
+    if bad:
+        return False, f"pas du gameplay ({', '.join(bad[:3])})"
+    good = _has(head, include) or _has(short.description[:300].lower(), include)
+    if good:
+        return True, f"gameplay ({', '.join(good[:3])})"
+    return False, "indéterminé (aucun mot de gameplay)"
+
+
+def top_shorts(cfg: Mapping[str, Any], yt: Any, *, now: datetime, hours: float = 48, count: int = 10,
+               gameplay_only: bool = True) -> tuple[list[tuple[Short, str]], list[tuple[Short, str]]]:
+    """Les ``count`` Shorts GTA 6 les plus vus des ``hours`` dernières heures : (retenus, écartés), avec raison."""
+    vcfg = {**(get(cfg, "viral", {}) or {}), "hours": hours, "max_shorts": 50}
+    shorts = viral_shorts({**cfg, "viral": vcfg}, yt, now=now)
+    kept: list[tuple[Short, str]] = []
+    dropped: list[tuple[Short, str]] = []
+    for sh in shorts:
+        ok, why = gameplay_verdict(sh, cfg) if gameplay_only else (True, "")
+        (kept if ok else dropped).append((sh, why))
+    return kept[:count], dropped
+
+
+def write_top_shorts(path_: str | Path, kept: Sequence[tuple[Short, str]], dropped: Sequence[tuple[Short, str]], *,
+                     hours: float, gameplay_only: bool) -> Path:
+    def line(i: int, sh: Short, why: str) -> str:
+        views = f"{sh.views:,}".replace(",", " ")
+        extra = f" - {why}" if why else ""
+        return (f"{i}. {sh.title}\n   {sh.channel} - {views} vues - publié le {sh.published_at:%d/%m à %H:%M}{extra}"
+                f"\n   {sh.url}\n")
+
+    kind = " gameplay" if gameplay_only else ""
+    parts = [f"Top {len(kept)} Shorts GTA 6{kind} les plus vus ({hours:g} h)\n"]
+    parts += [line(i, sh, why) for i, (sh, why) in enumerate(kept, 1)]
+    if gameplay_only and dropped:
+        parts.append(f"\n--- Écartés ({len(dropped)}) : vérifie qu'aucun gameplay n'a été oublié ---\n")
+        parts += [f"- {sh.title} ({sh.channel}, {sh.views:,} vues) : {why}\n   {sh.url}".replace(",", " ")
+                  for sh, why in dropped]
+    out = Path(path_)
+    out.write_text("\n".join(parts) + "\n", encoding="utf-8-sig")
     return out
 
 

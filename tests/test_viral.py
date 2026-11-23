@@ -255,3 +255,31 @@ def test_scan_fixed_moment_and_bestof_viral_order(project):
         state.upsert_clip(cid, status="synced", path=str(mp4))
     picks = B.select_picks(cfg, now=NOW, viral=True)
     assert [p.clip_id for p in picks] == ["viral_b_0", "viral_c_0", "viral_a_0"]   # par vues, sans « normal »
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Bro Vs Me INSANE Mission Cards 😱🔥 | GTA VI", True),
+    ("GTA 6 - Helicopter Crash & Damage Physics", True),
+    ("GTA 6 Devs Knew Players Would Try This", True),
+    ("Lock in lucia😭 - GTA 6", True),
+    ("Is GTA 5 Better Than GTA 6?", False),
+    ("GTA 5 vs GTA 6 graphics", False),
+    ("How Will GTA 6 Online Be Like?", False),
+    ("Mythpat Cried Live on His GTA 6 Stream", False),
+    ("GTA 6 Jason & Lucia DIY Paper Puzzle", False),
+    ("GTA 6's Ending Will Leave You in Tears", False),
+    ("About GTA 6…", False),                                             # indéterminé -> écarté
+])
+def test_gameplay_verdict(title, expected):
+    ok, why = V.gameplay_verdict(V.Short("x", title, "ch", "", 1, 30, NOW))
+    assert ok is expected, why
+
+
+def test_top_shorts_gameplay_file(cfg, tmp_path):
+    yt = _yt(cfg, FakeYT())
+    kept, dropped = V.top_shorts(cfg, yt, now=NOW, hours=48, count=10)
+    assert [s.id for s, _ in kept] == ["SHORT1", "SHORT2"]               # crash / cops chase : gameplay
+    out = V.write_top_shorts(tmp_path / "top.txt", kept, dropped, hours=48, gameplay_only=True)
+    text = out.read_text(encoding="utf-8-sig")
+    assert text.startswith("Top 2 Shorts GTA 6 gameplay les plus vus (48 h)")
+    assert "https://www.youtube.com/shorts/SHORT1" in text and "3 000 000 vues" in text
