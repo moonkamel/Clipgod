@@ -126,6 +126,7 @@ scan:
     device: cuda                    # bascule auto sur cpu/int8 si aucun GPU
     compute_type: float16
     batch_size: 16                  # BatchedInferencePipeline (x3-4 plus rapide sur T4) ; 0 = désactivé
+    chunk_minutes: 30               # transcription par tronçons sauvegardés : reprise après coupure, RAM bornée
     language: null                  # null = auto-détection
     beam_size: 5
     vad_filter: true

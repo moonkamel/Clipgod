@@ -190,37 +190,60 @@ def _filter_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, 
     return {k: v for k, v in kwargs.items() if k in params}
 
 
-def load_wav_16k(path: str) -> np.ndarray:
-    """WAV PCM 16 bits (produit par :func:`extract_audio`) -> float32 mono dans [-1, 1].
+def wav_info(path: str) -> tuple[int, int, int]:
+    """(fréquence, canaux, nombre d'échantillons) d'un WAV PCM 16 bits."""
+    import wave
 
-    On passe ce tableau à faster-whisper au lieu du chemin du fichier : faster-whisper décoderait sinon
+    with contextlib.closing(wave.open(str(path), "rb")) as w:
+        if w.getsampwidth() != 2:
+            raise ScanError(f"WAV inattendu ({8 * w.getsampwidth()} bits) : 16 bits requis.")
+        return w.getframerate(), w.getnchannels(), w.getnframes()
+
+
+def read_wav_16k(path: str, start: float = 0.0, duration: float | None = None) -> np.ndarray:
+    """Lit [start, start+duration] d'un WAV PCM 16 bits 16 kHz -> float32 mono dans [-1, 1].
+
+    Ce tableau est passé à faster-whisper au lieu du chemin du fichier : faster-whisper décoderait sinon
     l'audio avec PyAV, dont certaines versions sont incompatibles (``av.open(... metadata_errors=...)``
-    refusé par PyAV >= 15). Le module ``wave`` de la bibliothèque standard suffit pour notre WAV.
+    refusé par PyAV >= 15). Lire par tronçons garde une mémoire faible, même sur 10 h de VOD.
     """
     import wave
 
     with contextlib.closing(wave.open(str(path), "rb")) as w:
         if w.getsampwidth() != 2:
             raise ScanError(f"WAV inattendu ({8 * w.getsampwidth()} bits) : 16 bits requis.")
-        rate, channels = w.getframerate(), w.getnchannels()
-        raw = w.readframes(w.getnframes())
+        rate, channels, total = w.getframerate(), w.getnchannels(), w.getnframes()
+        if rate != 16000:
+            raise ScanError(f"WAV à {rate} Hz : 16 000 Hz requis par whisper.")
+        first = min(total, max(0, round(start * rate)))
+        count = total - first if duration is None else min(total - first, round(duration * rate))
+        w.setpos(first)
+        raw = w.readframes(count)
     audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
     if channels > 1:
         audio = audio.reshape(-1, channels).mean(axis=1)
-    if rate != 16000:
-        raise ScanError(f"WAV à {rate} Hz : 16 000 Hz requis par whisper.")
     return audio
 
 
-def _run_whisper(model: Any, audio_path: str, wcfg: Mapping[str, Any]) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
+def load_wav_16k(path: str) -> np.ndarray:
+    """WAV complet -> float32 mono (voir :func:`read_wav_16k`)."""
+    return read_wav_16k(path)
+
+
+def _whisper_kwargs(wcfg: Mapping[str, Any]) -> dict[str, Any]:
+    return {
         "language": wcfg.get("language") or None,
         "beam_size": int(wcfg.get("beam_size", 5)),
         "vad_filter": bool(wcfg.get("vad_filter", True)),
         "word_timestamps": True,
         "condition_on_previous_text": False,  # évite les boucles d'hallucination sur les longs streams
     }
-    audio = load_wav_16k(audio_path)          # tableau numpy : pas de décodage PyAV dans faster-whisper
+
+
+def _run_whisper(model: Any, audio: np.ndarray, wcfg: Mapping[str, Any], *, offset: float = 0.0,
+                 total: float | None = None) -> dict[str, Any]:
+    """Transcrit un tableau audio ; les horodatages sont décalés de ``offset`` secondes (tronçon)."""
+    kwargs = _whisper_kwargs(wcfg)
     batch_size = int(wcfg.get("batch_size", 0) or 0)
     if batch_size > 0:
         from faster_whisper import BatchedInferencePipeline
@@ -231,24 +254,25 @@ def _run_whisper(model: Any, audio_path: str, wcfg: Mapping[str, Any]) -> dict[s
     else:
         segments, info = model.transcribe(audio, **_filter_kwargs(model.transcribe, kwargs))
 
-    total = float(getattr(info, "duration", 0.0) or 0.0)
+    chunk_len = float(getattr(info, "duration", 0.0) or len(audio) / 16000)
+    total = total or chunk_len
     next_report = 0.1
     out: list[dict[str, Any]] = []
     for seg in segments:
         words = [
-            {"start": round(float(w.start), 3), "end": round(float(w.end), 3), "word": w.word.strip(),
-             "prob": round(float(getattr(w, "probability", 1.0)), 3)}
+            {"start": round(offset + float(w.start), 3), "end": round(offset + float(w.end), 3),
+             "word": w.word.strip(), "prob": round(float(getattr(w, "probability", 1.0)), 3)}
             for w in (seg.words or []) if w.word.strip()
         ]
-        out.append({"start": round(float(seg.start), 3), "end": round(float(seg.end), 3),
+        out.append({"start": round(offset + float(seg.start), 3), "end": round(offset + float(seg.end), 3),
                     "text": seg.text.strip(), "words": words})
-        if total and seg.end / total >= next_report:
+        if total == chunk_len and seg.end / total >= next_report:      # fichier court : un seul tronçon
             log.info("transcription %d%%", int(100 * seg.end / total))
             next_report += 0.1
     return {
         "language": getattr(info, "language", None),
         "language_probability": round(float(getattr(info, "language_probability", 0.0) or 0.0), 3),
-        "duration": total,
+        "duration": chunk_len,
         "segments": out,
     }
 
@@ -279,37 +303,93 @@ def preload_cuda_libs() -> int:
     return loaded
 
 
-def transcribe(audio_path: str, wcfg: Mapping[str, Any]) -> dict[str, Any]:
-    """Transcrit avec faster-whisper ; en cas d'OOM GPU, retente avec un modèle plus petit."""
-    if _cuda_device_count() > 0:
-        preload_cuda_libs()
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise ScanError("faster-whisper n'est pas installé (pip install -e '.[cloud]').") from exc
+def transcribe(audio_path: str, wcfg: Mapping[str, Any], *, checkpoint_dir: str | Path | None = None) -> dict[str, Any]:
+    """Transcrit avec faster-whisper, par tronçons de ``chunk_minutes`` (30 min par défaut).
 
-    model_name, device, compute = choose_whisper_model(wcfg)
-    chain = [model_name] + [m for m in wcfg.get("fallback_models", ["medium", "small"]) if m != model_name]
-    last_exc: BaseException | None = None
-    for name in chain:
-        model = None
+    - mémoire bornée : seul le tronçon courant est en RAM ;
+    - reprise : chaque tronçon terminé est écrit dans ``checkpoint_dir`` (sur Drive dans le notebook) et
+      n'est jamais refait après une déconnexion ou un plantage de session ;
+    - OOM GPU : retente avec un modèle plus petit, sans refaire les tronçons déjà terminés.
+    """
+    rate, _channels, frames = wav_info(audio_path)
+    total = frames / float(rate or 16000)
+    chunk = max(60.0, float(wcfg.get("chunk_minutes", 30)) * 60)
+    n_chunks = max(1, int(np.ceil(total / chunk)))
+    cache = Path(checkpoint_dir) / "transcript_chunks" if checkpoint_dir else None
+    if cache is not None:
+        cache.mkdir(parents=True, exist_ok=True)
+
+    parts: list[dict[str, Any] | None] = [None] * n_chunks
+    if cache is not None:
+        for i in range(n_chunks):
+            f = cache / f"chunk_{i:03d}.json"
+            if f.is_file():
+                data = read_json(f, default=None)
+                if isinstance(data, dict) and data.get("chunk_seconds") == chunk:
+                    parts[i] = data
+        done = sum(p is not None for p in parts)
+        if done:
+            log.info("↺ transcription : %d/%d tronçon(s) déjà faits, reprise", done, n_chunks)
+
+    wcfg = dict(wcfg)
+    if not wcfg.get("language"):                       # même langue pour tous les tronçons
+        wcfg["language"] = next((p.get("language") for p in parts if p and p.get("language")), None)
+    model_name = device = compute = None
+    if any(p is None for p in parts):
+        if _cuda_device_count() > 0:
+            preload_cuda_libs()
         try:
-            log.info("Chargement whisper %s (%s/%s)", name, device, compute)
-            model = WhisperModel(name, device=device, compute_type=compute)
-            result = _run_whisper(model, audio_path, wcfg)
-            result.update({"model": name, "device": device, "compute_type": compute})
-            return result
-        except RuntimeError as exc:
-            if not _is_oom(exc):
-                raise
-            last_exc = exc
-            log.warning("Whisper %s : mémoire GPU insuffisante, essai du modèle suivant.", name)
-            if compute == "float16":
-                compute = "int8_float16"
-        finally:
-            del model
-            _free_gpu()
-    raise ScanError(f"Transcription impossible (mémoire GPU) : {last_exc}")
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise ScanError("faster-whisper n'est pas installé (pip install -e '.[cloud]').") from exc
+        model_name, device, compute = choose_whisper_model(wcfg)
+        chain = [model_name] + [m for m in wcfg.get("fallback_models", ["medium", "small"]) if m != model_name]
+        last_exc: BaseException | None = None
+        for name in chain:
+            model = None
+            try:
+                log.info("Chargement whisper %s (%s/%s)", name, device, compute)
+                model = WhisperModel(name, device=device, compute_type=compute)
+                for i in range(n_chunks):
+                    if parts[i] is not None:
+                        continue
+                    audio = read_wav_16k(audio_path, i * chunk, chunk)
+                    res = _run_whisper(model, audio, wcfg, offset=i * chunk, total=total if n_chunks > 1 else None)
+                    del audio
+                    res.update({"chunk": i, "chunk_seconds": chunk, "model": name})
+                    parts[i] = res
+                    if not wcfg.get("language") and res.get("language"):
+                        wcfg["language"] = res["language"]
+                    if cache is not None:
+                        write_json(cache / f"chunk_{i:03d}.json", res, indent=None)
+                    if n_chunks > 1:
+                        log.info("transcription %d%% (tronçon %d/%d)", int(100 * (i + 1) / n_chunks), i + 1, n_chunks)
+                model_name = name
+                break
+            except RuntimeError as exc:
+                if not _is_oom(exc):
+                    raise
+                last_exc = exc
+                log.warning("Whisper %s : mémoire GPU insuffisante, essai du modèle suivant.", name)
+                if compute == "float16":
+                    compute = "int8_float16"
+            finally:
+                del model
+                _free_gpu()
+        else:
+            raise ScanError(f"Transcription impossible (mémoire GPU) : {last_exc}")
+
+    first = next(p for p in parts if p)
+    return {
+        "language": first.get("language"),
+        "language_probability": first.get("language_probability", 0.0),
+        "duration": round(total, 3),
+        "segments": [seg for p in parts if p for seg in p["segments"]],
+        "model": model_name or first.get("model"),
+        "device": device,
+        "compute_type": compute,
+        "chunks": n_chunks,
+    }
 
 
 def words_from_transcript(transcript: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -776,7 +856,7 @@ def scan(video_path: str, output_dir: str, config: dict) -> list[dict]:
             try:
                 with log_step(log, "transcribe", video_id=video_id):
                     transcript = _step_json(ckpt, "transcribe", work / "transcript.json",
-                                            lambda: transcribe(str(get_wav()), scfg.get("whisper") or {}))
+                                            lambda: transcribe(str(get_wav()), scfg.get("whisper") or {}, checkpoint_dir=work))
             except Exception:
                 if scfg.get("require_transcript", True):
                     raise

@@ -154,3 +154,29 @@ def test_voiceover_option_maps_to_render_config(env):
     cfg, _, _ = env
     out = W.build_job_config(cfg, {"job_id": "j", "options": {"voiceover": True}})
     assert out["render"]["voiceover"]["enabled"] is True
+
+
+def test_lease_expires_quickly_and_only_job_forces(env):
+    cfg, drive, tmp = env
+    add_job(drive, tmp)
+    jid = "20261122-100000-aaaaaa"
+    lock = W.claim_job(drive, jid, "colab-dead-1")                # session qui va « planter »
+    exp = W._parse_ts(lock["expires_at"])
+    assert 19 <= (exp - W.utc_now()).total_seconds() / 60 <= 21    # bail de 20 min, plus 3 h
+    assert W.run_queue(drive, cfg, workdir=tmp / "w", stages=("scan",), scan_fn=fake_scan([])) == []
+    res = W.run_queue(drive, cfg, workdir=tmp / "w", stages=("scan",), scan_fn=fake_scan([]), only_job=jid)
+    assert res[0]["status"] == "done"                              # ONLY_JOB reprend le bail
+
+
+def test_lease_renewal(env):
+    _cfg, drive, tmp = env
+    add_job(drive, tmp)
+    jid = "20261122-100000-aaaaaa"
+    W.claim_job(drive, jid, "me", lease_minutes=1)
+    assert W.renew_lease(drive, jid, "me", lease_minutes=30)
+    exp = W._parse_ts(W.read_lock(drive, jid)["expires_at"])
+    assert (exp - W.utc_now()).total_seconds() > 25 * 60
+    assert not W.renew_lease(drive, jid, "someone-else")
+    with W.LeaseKeeper(drive, jid, "me", lease_minutes=0.05) as keeper:   # renouvelle toutes les 5 s
+        assert keeper._thread.is_alive()
+    assert not keeper._thread.is_alive()

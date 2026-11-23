@@ -4,7 +4,8 @@ Toute la logique du notebook vit ici (testable, versionnée) ; le notebook se co
     drive = get_drive(cfg); run_queue(drive, cfg, stages=("scan", "render"))
 
 Cycle d'un job :
-    1. réservation  : ``jobs/<job_id>.lock`` (bail de ``lease_hours``) — évite que Colab et Kaggle prennent le
+    1. réservation  : ``jobs/<job_id>.lock`` (bail de ``lease_minutes``, renouvelé toutes les quelques minutes
+                      pendant le traitement : après un plantage, le job se libère seul) — évite que Colab et Kaggle prennent le
                       même job. Best effort : Drive n'offre pas de verrou atomique.
     2. config       : config.yaml du repo  <-  ``job["config"]`` (réglages du laptop)  <-  overrides du notebook
                       + ``ClipGod/model.pkl`` s'il existe (poids appris par ``clipgod learn``).
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -69,23 +71,70 @@ def read_lock(drive: DriveBackend, job_id: str) -> dict[str, Any]:
     return lock if isinstance(lock, dict) else {}
 
 
-def claim_job(drive: DriveBackend, job_id: str, me: str, *, lease_hours: float = 3.0) -> dict[str, Any] | None:
-    """Réserve un job. Retourne le lock écrit, ou None si un autre worker détient un bail encore valide."""
+def _expiry(minutes: float) -> str:
+    return (utc_now() + timedelta(minutes=minutes)).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def claim_job(drive: DriveBackend, job_id: str, me: str, *, lease_minutes: float = 20.0,
+              force: bool = False) -> dict[str, Any] | None:
+    """Réserve un job. Retourne le lock écrit, ou None si un autre worker détient un bail encore valide.
+
+    ``force`` (job demandé explicitement avec ONLY_JOB) reprend aussi un bail encore valide, par exemple celui
+    d'une session Colab qui vient de planter.
+    """
     lock = read_lock(drive, job_id)
     expires = _parse_ts(lock.get("expires_at"))
     if lock.get("worker") not in (None, me) and expires and expires > utc_now():
-        log.info("Job %s déjà pris par %s jusqu'à %s : ignoré.", job_id, lock["worker"], lock["expires_at"])
-        return None
+        if not force:
+            log.info("Job %s déjà pris par %s jusqu'à %s : ignoré.", job_id, lock["worker"], lock["expires_at"])
+            return None
+        log.warning("Job %s repris de force à %s (ONLY_JOB).", job_id, lock["worker"])
     new_lock = {
         "job_id": job_id,
         "worker": me,
         "claimed_at": utc_now_iso(),
-        "expires_at": (utc_now() + timedelta(hours=lease_hours)).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "expires_at": _expiry(lease_minutes),
         "attempts": int(lock.get("attempts", 0)) + 1,
         "last_error": lock.get("last_error"),
     }
     drive.write_json(_lock_path(drive, job_id), new_lock)
     return new_lock
+
+
+def renew_lease(drive: DriveBackend, job_id: str, me: str, *, lease_minutes: float = 20.0) -> bool:
+    """Prolonge le bail si ce worker le détient toujours. False si un autre l'a repris entre-temps."""
+    lock = read_lock(drive, job_id)
+    if lock.get("worker") != me:
+        return False
+    lock["expires_at"] = _expiry(lease_minutes)
+    drive.write_json(_lock_path(drive, job_id), lock)
+    return True
+
+
+class LeaseKeeper:
+    """Renouvelle le bail en arrière-plan pendant le traitement (toutes les ``lease_minutes / 3``)."""
+
+    def __init__(self, drive: DriveBackend, job_id: str, me: str, *, lease_minutes: float = 20.0):
+        self.drive, self.job_id, self.me, self.lease = drive, job_id, me, lease_minutes
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"lease-{job_id}", daemon=True)
+
+    def __enter__(self) -> LeaseKeeper:  # noqa: PYI034 — typing.Self absent de Python 3.10
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(max(5.0, self.lease * 60 / 3)):
+            try:
+                if not renew_lease(self.drive, self.job_id, self.me, lease_minutes=self.lease):
+                    log.warning("Bail du job %s repris par un autre worker.", self.job_id)
+                    return
+            except Exception as exc:  # noqa: BLE001 — Drive indisponible un instant : on réessaiera
+                log.warning("Renouvellement du bail impossible : %s", exc)
 
 
 def release_job(drive: DriveBackend, job_id: str, *, error: str | None = None) -> None:
@@ -274,7 +323,7 @@ def run_queue(
     max_jobs: int | None = None,
     only_job: str | None = None,
     overrides: Mapping[str, Any] | None = None,
-    lease_hours: float = 3.0,
+    lease_minutes: float = 20.0,
     max_attempts: int = 2,
     **process_kwargs: Any,
 ) -> list[dict[str, Any]]:
@@ -297,12 +346,13 @@ def run_queue(
         if max_jobs is not None and len(summaries) >= max_jobs:
             break
         job_id = str(job["job_id"])
-        lock = claim_job(drive, job_id, me, lease_hours=lease_hours)
+        lock = claim_job(drive, job_id, me, lease_minutes=lease_minutes, force=bool(only_job))
         if lock is None:
             continue
         try:
-            payload = process_job(job, drive, base_config, stages=stages, workdir=workdir,
-                                  overrides=overrides, **process_kwargs)
+            with LeaseKeeper(drive, job_id, me, lease_minutes=lease_minutes):
+                payload = process_job(job, drive, base_config, stages=stages, workdir=workdir,
+                                      overrides=overrides, **process_kwargs)
         except NotImplementedError:
             # Étape pas encore disponible : erreur de configuration du notebook, pas du job.
             lock = read_lock(drive, job_id)
