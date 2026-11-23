@@ -385,6 +385,8 @@ def tiktok(
     limit: int = typer.Option(3, "--limit", "-n", help="Nombre de clips à préparer dans cette séance."),
     schedule: bool = typer.Option(True, "--schedule/--now", help="Propose un créneau de forte audience par clip."),
     plan_only: bool = typer.Option(False, "--plan", help="Affiche les prochains posts sans rien marquer."),
+    choose: bool = typer.Option(False, "--choose", help="Liste tous les clips : regarde-les et choisis "
+                                "lesquels publier (ex. 1,3,5-7)."),
     open_studio: bool = typer.Option(True, "--open/--no-open", help="Ouvre TikTok Studio dans le navigateur."),
 ) -> None:
     """Publication manuelle assistée : légende copiée, clip sélectionné, créneau conseillé (gratuit, sans API)."""
@@ -392,15 +394,62 @@ def tiktok(
     from zoneinfo import ZoneInfo
 
     from rich.panel import Panel
+    from rich.table import Table
 
-    from modules.manual import STUDIO_URLS, copy_to_clipboard, plan_manual, record_manual, reveal_file
+    from modules.manual import (
+        STUDIO_URLS,
+        copy_to_clipboard,
+        parse_selection,
+        plan_manual,
+        play_file,
+        record_manual,
+        reveal_file,
+    )
 
     cfg = ctx.obj["config"]
     tz = ZoneInfo(str(cfg.get("project", {}).get("timezone", "Europe/Paris")))
     rejected: list[tuple[str, list[str]]] = []
-    posts = plan_manual(cfg, platform=platform, limit=limit, schedule=schedule, rejected=rejected)
-    for clip_id, reasons in rejected:
-        console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
+    if choose:
+        listing = plan_manual(cfg, platform=platform, schedule=False, rejected=rejected, one_per_moment=False)
+        for clip_id, reasons in rejected:
+            console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
+        if not listing:
+            console.print("[dim]Rien à publier : lancez clipgod sync pour récupérer de nouveaux clips.[/]")
+            return
+        table = Table(title=f"Clips disponibles pour {platform}")
+        for col in ("#", "clip", "score", "durée", "hook"):
+            table.add_column(col, overflow="fold")
+        for i, post in enumerate(listing, 1):
+            table.add_row(str(i), post.clip.path.name, f"{post.clip.score:.0f}",
+                          f"{float(post.clip.meta.get('duration') or 0):.0f} s", str(post.clip.meta.get("hook") or ""))
+        console.print(table)
+        console.print("[dim]Plusieurs variantes d'un même moment (_h1, _h2…) = même vidéo, hook différent : "
+                      "n'en publie qu'une.[/]")
+        selected: list[int] = []
+        while not selected:
+            answer = typer.prompt("Numéros à publier (ex. 1,3,5-7) · v3 = voir le clip 3 · q = quitter",
+                                  default="", show_default=False).strip().lower()
+            if answer in ("", "q"):
+                return
+            if answer.startswith("v"):
+                try:
+                    play_file(listing[int(answer[1:].strip()) - 1].clip.path)
+                except (ValueError, IndexError):
+                    console.print("[red]Numéro invalide.[/]")
+                continue
+            try:
+                selected = parse_selection(answer, len(listing))
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/]")
+        posts = plan_manual(cfg, platform=platform, schedule=schedule, only=[listing[i - 1].clip.clip_id
+                                                                             for i in selected])
+        if len(posts) < len(selected):
+            console.print(f"[yellow]{len(selected) - len(posts)} clip(s) sans créneau libre dans les "
+                          "10 prochains jours : relance plus tard.[/]")
+    else:
+        posts = plan_manual(cfg, platform=platform, limit=limit, schedule=schedule, rejected=rejected)
+        for clip_id, reasons in rejected:
+            console.print(f"[red]✖ refusé[/] {clip_id} : {' ; '.join(reasons)}")
     if not posts:
         console.print("[dim]Rien à publier : lancez clipgod sync pour récupérer de nouveaux clips.[/]")
         return
@@ -426,8 +475,12 @@ def tiktok(
                             subtitle="légende copiée ✔" if copied else "copie la légende ci-dessus"))
         console.print(f"   📁 {post.clip.path}")
         console.print(f"   🕒 Programmer : [bold cyan]{when(post)}[/] ({tz.key})")
-        answer = typer.prompt("   Entrée = c'est posté · colle le lien TikTok (optionnel) · s = passer · q = quitter",
-                              default="", show_default=False).strip()
+        while True:
+            answer = typer.prompt("   Entrée = c'est posté · colle le lien TikTok (optionnel) · v = voir · "
+                                  "s = passer · q = quitter", default="", show_default=False).strip()
+            if answer.lower() != "v":
+                break
+            play_file(post.clip.path)
         if answer.lower() == "q":
             break
         if answer.lower() == "s":

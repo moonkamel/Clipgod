@@ -318,6 +318,7 @@ Aucun compte ni clé d'API : vous déposez vous-même les clips dans
 clipgod sync              # récupère les clips depuis Drive
 clipgod tiktok --plan     # aperçu des prochains posts et de leurs légendes
 clipgod tiktok            # séance de publication (3 clips par défaut, -n 5 pour 5)
+clipgod tiktok --choose   # liste tous les clips : « v3 » pour regarder le 3, puis « 1,3,5-7 » pour choisir
 ```
 
 Pour chaque clip, ClipGod :

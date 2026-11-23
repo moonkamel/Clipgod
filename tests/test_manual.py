@@ -94,3 +94,40 @@ def test_cli_tiktok_plan_and_interactive(env, monkeypatch):
     assert res.exit_code == 0, res.output
     posts = state.load()["posts"]
     assert list(posts) == ["m0@tiktok"] and posts["m0@tiktok"]["url"].endswith("/9")
+
+
+def test_parse_selection():
+    assert MN.parse_selection("1,3 5-7", 6) == [1, 3, 5, 6]
+    assert MN.parse_selection("2;2, 9", 4) == [2]
+    with pytest.raises(ValueError):
+        MN.parse_selection("abc", 3)
+
+
+def test_plan_full_listing_and_only_selection(env):
+    cfg, _, add = env
+    add("m0", moment_idx=0, score=70)
+    add("m0_h1", moment_idx=0, variant=1, score=70)
+    add("m1", moment_idx=1, score=95)
+    listing = MN.plan_manual(cfg, schedule=False, now=NOW, one_per_moment=False)
+    assert [p.clip.clip_id for p in listing] == ["m1", "m0", "m0_h1"]
+    chosen = MN.plan_manual(cfg, now=NOW, only=["m0_h1", "m1"])
+    assert [p.clip.clip_id for p in chosen] == ["m0_h1", "m1"] and all(p.slot for p in chosen)
+
+
+def test_cli_tiktok_choose(env, monkeypatch):
+    import clipgod
+
+    _cfg, state, add = env
+    add("m0", moment_idx=0, score=70)
+    add("m0_h1", moment_idx=0, variant=1, score=70)
+    add("m1", moment_idx=1, score=95)
+    played = []
+    monkeypatch.setattr(MN, "copy_to_clipboard", lambda text: True)
+    monkeypatch.setattr(MN, "reveal_file", lambda p: True)
+    monkeypatch.setattr(MN, "play_file", lambda p: played.append(p.name) or True)
+    monkeypatch.setattr("webbrowser.open", lambda url: True)
+    # liste : 1=m1, 2=m0, 3=m0_h1 ; on regarde le 3, on choisit 3, puis on confirme
+    res = CliRunner().invoke(clipgod.app, ["tiktok", "--choose"], input="v3\n3\n\n")
+    assert res.exit_code == 0, res.output
+    assert played == ["m0_h1.mp4"]
+    assert list(state.load()["posts"]) == ["m0_h1@tiktok"]

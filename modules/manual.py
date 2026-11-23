@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -80,8 +81,13 @@ def _manual_posts(state: StateStore, platform: str) -> dict[str, dict[str, Any]]
 
 def plan_manual(cfg: Mapping[str, Any], *, platform: str = "tiktok", limit: int | None = None,
                 schedule: bool = True, now: datetime | None = None,
-                rejected: list[tuple[str, list[str]]] | None = None) -> list[ManualPost]:
-    """Prochains posts à déposer à la main sur ``platform`` (un clip déjà posté n'est jamais reproposé)."""
+                rejected: list[tuple[str, list[str]]] | None = None, one_per_moment: bool = True,
+                only: Sequence[str] | None = None) -> list[ManualPost]:
+    """Prochains posts à déposer à la main sur ``platform`` (un clip déjà posté n'est jamais reproposé).
+
+    ``one_per_moment`` : une seule variante de hook par moment (la 1re du plan) ;
+    ``only`` : clips choisis par l'utilisateur (ids), publiés dans cet ordre.
+    """
     mcfg = get(cfg, "publish.manual", {}) or {}
     state = StateStore(path(cfg, "state"))
     tz = ZoneInfo(str(get(cfg, "project.timezone", "Europe/Paris")))
@@ -95,10 +101,16 @@ def plan_manual(cfg: Mapping[str, Any], *, platform: str = "tiktok", limit: int 
     # Sur un compte manuel, une seule variante A/B par moment (la meilleure) : pas de doublons visibles.
     seen_groups = {p.get("group") for p in posts.values()}
     plan = [(c, p) for c, p in plan_posts(candidates, [platform], already=already) if c.group not in seen_groups]
-    best: dict[str, tuple[ClipInfo, str]] = {}
-    for c, p in plan:
-        best.setdefault(c.group, (c, p))
-    plan = list(best.values())
+    if only is not None:
+        by_id = {c.clip_id: (c, p) for c, p in plan}
+        plan = [by_id[cid] for cid in dict.fromkeys(only) if cid in by_id]
+    elif one_per_moment:
+        best: dict[str, tuple[ClipInfo, str]] = {}
+        for c, p in plan:
+            best.setdefault(c.group, (c, p))
+        plan = list(best.values())
+    else:                                                          # liste complète : meilleurs moments d'abord
+        plan.sort(key=lambda cp: (-cp[0].score, cp[0].group, cp[0].variant))
     if limit is not None:
         plan = plan[: max(0, limit)]
     if schedule:
@@ -149,6 +161,37 @@ def copy_to_clipboard(text: str) -> bool:
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("Presse-papiers indisponible : %s", exc)
     return False
+
+
+def play_file(file: Path) -> bool:
+    """Ouvre le clip dans le lecteur vidéo par défaut."""
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(file))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(file)])
+        elif shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", str(file)])
+        else:
+            return False
+        return True
+    except OSError as exc:
+        log.warning("Impossible d'ouvrir le clip : %s", exc)
+        return False
+
+
+def parse_selection(text: str, n: int) -> list[int]:
+    """« 1,3 5-7 » -> [1, 3, 5, 6, 7] (numéros 1..n, doublons et hors bornes ignorés)."""
+    out: list[int] = []
+    for part in re.split(r"[,\s;]+", text.strip()):
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d+)(?:-(\d+))?", part)
+        if not m:
+            raise ValueError(f"sélection invalide : {part!r}")
+        a, b = int(m.group(1)), int(m.group(2) or m.group(1))
+        out.extend(i for i in range(min(a, b), max(a, b) + 1) if 1 <= i <= n)
+    return list(dict.fromkeys(out))
 
 
 def reveal_file(file: Path) -> bool:
